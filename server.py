@@ -1449,7 +1449,7 @@ async def _get_forecaster_comment(area_code: str) -> str:
             lines.append(f"  {line}")
 
     lines.append("")
-    lines.append(f"出典: 気象庁 https://www.jma.go.jp/bosai/forecaster_comment/#areaCode={area_code}")
+    lines.append(f"出典: 気象庁 https://www.jma.go.jp/bosai/forecast/#area_type=offices&area_code={area_code}")
     return "\n".join(lines).rstrip()
 
 
