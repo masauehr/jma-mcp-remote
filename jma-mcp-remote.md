@@ -1,7 +1,7 @@
 # jma-mcp-remote — JMA MCP サーバー リモート版（HTTP/SSE）
 
 `jma_mcp`（stdio ローカル版）をベースに HTTP/SSE 通信へ切り替えたリモートデプロイ版。
-Render にデプロイし、Claude.ai Web版・デスクトップアプリから使用する。
+Render にデプロイし、Claude.ai Web版・デスクトップアプリ・iPhone版から使用する。
 
 ---
 
@@ -12,8 +12,7 @@ Render にデプロイし、Claude.ai Web版・デスクトップアプリから
 | プロトコル | MCP（Model Context Protocol）/ HTTP + SSE ベース |
 | デプロイ先 | Render（Web Service） |
 | SSE エンドポイント | `https://jma-mcp-remote.onrender.com/sse` |
-| 対応クライアント | Claude.ai Web版・デスクトップアプリ（macOS） |
-| 非対応クライアント | iPhone版 Claude（MCP未対応のため要約版になる） |
+| 対応クライアント | Claude.ai Web版・デスクトップアプリ（macOS）・iPhone版 |
 | GitHub | https://github.com/masauehr/jma-mcp-remote |
 
 ---
@@ -24,7 +23,7 @@ Render にデプロイし、Claude.ai Web版・デスクトップアプリから
 |---|---|---|
 | 通信方式 | stdio（標準入出力） | HTTP + SSE |
 | 起動方法 | Claude Code がサブプロセス起動 | Render 上で常駐 |
-| 対応クライアント | Claude Code（CLI） | Claude.ai Web・デスクトップアプリ |
+| 対応クライアント | Claude Code（CLI） | Claude.ai Web・デスクトップアプリ・iPhone版 |
 | 設定ファイル | `.mcp.json`（command/args） | `.mcp.json` または Claude.ai 設定（url） |
 | コスト | 無料（ローカル実行） | Render 無料プラン（スリープあり） |
 | ツール内容 | 全19種 | 同一（server.py を共有） |
@@ -78,7 +77,7 @@ Uvicorn running on http://0.0.0.0:XXXXX
 
 ## Claude.ai への接続手順
 
-### Web版・デスクトップアプリ共通
+### Web版・デスクトップアプリ・iPhone版 共通
 
 1. 設定 → **コネクタ**
 2. **カスタムコネクタを追加**
@@ -87,8 +86,9 @@ Uvicorn running on http://0.0.0.0:XXXXX
    - URL: `https://jma-mcp-remote.onrender.com/sse`
 4. **追加** → 接続確認
 
-> Web版で登録した設定はデスクトップアプリにも自動共有される。
-> 同じURLを再登録しようとすると「A server with this URL already exists.」エラーが出るが、これは登録済みのため問題なし。
+> Web版で登録した設定はデスクトップアプリ・iPhone版にも自動共有される。  
+> 同じURLを再登録しようとすると「A server with this URL already exists.」エラーが出るが、これは登録済みのため問題なし。  
+> iPhone版はコネクタをONにすることで動作する（2026-04-23 動作確認済み）。
 
 ### Claude Code から使う場合（jma_mcp_remote/ 内のみ）
 
@@ -106,6 +106,19 @@ Uvicorn running on http://0.0.0.0:XXXXX
 
 ---
 
+## 出典リンク表示設定（Projectsカスタム指示）
+
+Claude.ai では CLAUDE.md が読み込まれないため、出典URLを表示するには **Projects のカスタム指示（「手順」欄）** に以下を追加する。
+
+```
+気象庁MCPサーバー（jma-mcp-renderコネクタ）のツール結果を使って回答する際は、ツール結果の末尾にある「出典: 気象庁 https://...」のURLを必ず末尾にそのまま表示すること。URLを省略・変更しないこと。
+```
+
+> 設定場所: claude.ai → プロジェクト → 手順を編集  
+> Web版・デスクトップ・iPhone版すべてで共有される。
+
+---
+
 ## クライアント別対応状況
 
 | クライアント | MCP 対応 | 気象庁データ取得 | 備考 |
@@ -113,7 +126,7 @@ Uvicorn running on http://0.0.0.0:XXXXX
 | Claude Code（CLI） | ✅ | ✅ ローカル版 | `jma_mcp/.mcp.json` を使用 |
 | Claude.ai Web版 | ✅ | ✅ リモート版 | コネクタ登録済み |
 | Claude デスクトップアプリ（macOS） | ✅ | ✅ リモート版 | Web版と設定共有 |
-| Claude iPhone版 | ❌ | ❌ | MCP 未対応。学習データ or 要約回答になる |
+| Claude iPhone版 | ✅ | ✅ リモート版 | コネクタをONにすれば動作。2026-04-23 動作確認済み |
 
 ---
 
