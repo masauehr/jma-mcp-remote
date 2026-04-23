@@ -710,7 +710,11 @@ async def _get_forecast(area_code: str) -> str:
         return "エラー: 予報データが空です。"
 
     short_term = data[0]
-    lines = [f"【{area_name} 短期天気予報】", ""]
+    publishing_office = short_term.get("publishingOffice", "")
+    header = f"【{area_name} 短期天気予報】"
+    if publishing_office:
+        header += f"（{publishing_office} 発表）"
+    lines = [header, ""]
 
     for time_series in short_term.get("timeSeries", []):
         time_defines = time_series.get("timeDefines", [])
@@ -738,17 +742,33 @@ async def _get_forecast(area_code: str) -> str:
                     lines.append(f"  {date_str}: {pop}%")
             lines.append("")
 
-        # 気温
+        # 気温（時刻で最高/最低を分類して日付ごとに集約）
         if "temps" in area:
             lines.append("■ 気温")
+            temp_by_date: dict = {}
+            temp_order: list = []
+            wdays = ["月", "火", "水", "木", "金", "土", "日"]
             for i, temp in enumerate(area["temps"]):
-                if i < len(time_defines) and temp:
-                    date_str = format_date_jp(time_defines[i])
-                    lines.append(f"  {date_str}: {temp}°C")
+                if i >= len(time_defines) or not temp:
+                    continue
+                dt = datetime.fromisoformat(time_defines[i]).astimezone(JST)
+                date_key = f"{dt.month}月{dt.day}日({wdays[dt.weekday()]})"
+                kind = "max" if 6 <= dt.hour < 18 else "min"
+                if date_key not in temp_by_date:
+                    temp_by_date[date_key] = {}
+                    temp_order.append(date_key)
+                temp_by_date[date_key][kind] = temp
+            for date_key in temp_order:
+                t = temp_by_date[date_key]
+                parts = []
+                if "max" in t:
+                    parts.append(f"最高{t['max']}°C")
+                if "min" in t:
+                    parts.append(f"最低{t['min']}°C")
+                lines.append(f"  {date_key}: {' / '.join(parts)}")
             lines.append("")
 
-    lines.append(f"出典: 気象庁 https://www.jma.go.jp/bosai/map.html#contents=forecast")
-    lines.append(f"地域別: https://www.jma.go.jp/bosai/forecast/#area_type=offices&area_code={area_code}")
+    lines.append(f"出典: [気象庁 天気予報](https://www.jma.go.jp/bosai/forecast/#area_type=offices&area_code={area_code})")
     return "\n".join(lines).rstrip()
 
 
@@ -810,8 +830,7 @@ async def _get_weekly_forecast(area_code: str) -> str:
                     lines.append(f"  {date_str}: {t_min}°C / {t_max}°C")
             lines.append("")
 
-    lines.append(f"出典: 気象庁 https://www.jma.go.jp/bosai/map.html#contents=forecast")
-    lines.append(f"地域別: https://www.jma.go.jp/bosai/forecast/#area_type=offices&area_code={area_code}")
+    lines.append(f"出典: [気象庁 週間天気予報](https://www.jma.go.jp/bosai/forecast/#area_type=offices&area_code={area_code})")
     return "\n".join(lines).rstrip()
 
 
@@ -844,8 +863,7 @@ async def _get_overview(area_code: str) -> str:
         lines.append("概況テキストがありません。")
 
     lines.append("")
-    lines.append(f"出典: 気象庁 https://www.jma.go.jp/bosai/map.html#contents=forecast")
-    lines.append(f"地域別: https://www.jma.go.jp/bosai/forecast/#area_type=offices&area_code={area_code}")
+    lines.append(f"出典: [気象庁 天気予報](https://www.jma.go.jp/bosai/forecast/#area_type=offices&area_code={area_code})")
     return "\n".join(lines)
 
 
@@ -920,7 +938,7 @@ async def _get_warning(area_code: str) -> str:
         lines.append("現在、発表中の警報・注意報はありません。")
 
     lines.append("")
-    lines.append(f"出典: 気象庁 https://www.jma.go.jp/bosai/map.html#contents=warning&areaCode={area_code}")
+    lines.append(f"出典: [気象庁 警報・注意報](https://www.jma.go.jp/bosai/map.html#contents=warning&areaCode={area_code})")
     return "\n".join(lines).rstrip()
 
 
@@ -1066,7 +1084,7 @@ async def _get_early_warning(area_code: str) -> str:
         lines.append("現在、警報級の可能性が高い・中程度の現象はありません。")
 
     lines.append("")
-    lines.append(f"出典: 気象庁 https://www.jma.go.jp/bosai/map.html#contents=probability&areaCode={area_code}")
+    lines.append(f"出典: [気象庁 早期注意情報（警報級の可能性）](https://www.jma.go.jp/bosai/probability/#area_type=offices&area_code={area_code}&lang=ja)")
     return "\n".join(lines).rstrip()
 
 
@@ -1167,7 +1185,7 @@ async def _get_mdrr_data(element: str, prefecture: str = "", top_n: int = 20) ->
     total = len(records)
     lines_out.append(f"\n表示: {total}件")
 
-    lines_out.append(f"\n出典: 気象庁 {MDRR_BASE_URL}/")
+    lines_out.append(f"\n出典: [気象庁 気象の状況]({MDRR_BASE_URL}/)")
     return "\n".join(lines_out)
 
 
@@ -1290,7 +1308,7 @@ async def _get_daily_ranking(date_str: str = "", element_filter: str = "") -> st
         lines.append("該当するランキングデータがありませんでした。")
 
     lines.append("")
-    lines.append(f"出典: 気象庁 {url}")
+    lines.append(f"出典: [気象庁]({url})")
     return "\n".join(lines).rstrip()
 
 
@@ -1357,7 +1375,7 @@ async def _get_record_update(date_str: str = "") -> str:
         lines.append("この日に観測史上1位を更新した地点はありませんでした。")
 
     lines.append("")
-    lines.append(f"出典: 気象庁 {url}")
+    lines.append(f"出典: [気象庁]({url})")
     return "\n".join(lines).rstrip()
 
 
@@ -1419,7 +1437,7 @@ async def _get_forecaster_comment(area_code: str) -> str:
             lines.append(f"  {line}")
 
     lines.append("")
-    lines.append(f"出典: 気象庁 https://www.jma.go.jp/bosai/forecaster_comment/#areaCode={area_code}")
+    lines.append(f"出典: [気象庁 気象台コメント](https://www.jma.go.jp/bosai/forecaster_comment/#areaCode={area_code})")
     return "\n".join(lines).rstrip()
 
 
@@ -1519,7 +1537,10 @@ async def _get_information(area_code: str = "", info_type: str = "") -> str:
 
         lines.append("")
 
-    lines.append(f"出典: 気象庁 https://www.jma.go.jp/bosai/information/")
+    if area_code:
+        lines.append(f"出典: [気象庁 気象情報](https://www.jma.go.jp/bosai/information/#area_type=offices&area_code={area_code}&format=table)")
+    else:
+        lines.append("出典: [気象庁 気象情報](https://www.jma.go.jp/bosai/information/)")
     return "\n".join(lines).rstrip()
 
 
@@ -1878,7 +1899,7 @@ async def _get_early_weather_info(region_input: str = "0") -> str:
             "早期天候情報は2週間先に顕著な高温・低温・多雪などが予想される",
             "場合にのみ発表されます（毎週月・木曜日）。",
             "",
-            f"出典: {page_url}",
+            f"出典: [気象庁]({page_url})",
         ]
         return "\n".join(out)
 
@@ -1894,7 +1915,7 @@ async def _get_early_weather_info(region_input: str = "0") -> str:
             "早期天候情報は2週間先に顕著な高温・低温・多雪などが予想される",
             "場合にのみ発表されます（毎週月・木曜日）。",
             "",
-            f"出典: {page_url}",
+            f"出典: [気象庁]({page_url})",
         ]
         return "\n".join(out)
 
@@ -1913,7 +1934,7 @@ async def _get_early_weather_info(region_input: str = "0") -> str:
 
     out += [
         "",
-        f"出典: {page_url}",
+        f"出典: [気象庁]({page_url})",
     ]
     return "\n".join(out)
 
@@ -2008,7 +2029,7 @@ async def _get_earthquake_info(min_intensity: int = 0, count: int = 10) -> str:
             lines.append(f"  種別: {ttl}")
         lines.append("")
 
-    lines.append("出典: 気象庁 https://www.jma.go.jp/bosai/quake/")
+    lines.append("出典: [気象庁 地震情報](https://www.jma.go.jp/bosai/quake/)")
     return "\n".join(lines).rstrip()
 
 
@@ -2020,7 +2041,7 @@ async def _get_tsunami_info() -> str:
         return f"エラー: 津波情報の取得に失敗しました。\n詳細: {e}"
 
     if not items:
-        return "現在、発表中の津波情報はありません。\n\n出典: 気象庁 https://www.jma.go.jp/bosai/tsunami/"
+        return "現在、発表中の津波情報はありません。\n\n出典: [気象庁 津波情報](https://www.jma.go.jp/bosai/map.html#5/38.411/143.987/&elem=info&contents=tsunami)"
 
     lines = [f"【津波情報 最新{len(items)}件】", ""]
 
@@ -2043,7 +2064,7 @@ async def _get_tsunami_info() -> str:
 
         lines.append("")
 
-    lines.append("出典: 気象庁 https://www.jma.go.jp/bosai/tsunami/")
+    lines.append("出典: [気象庁 津波情報](https://www.jma.go.jp/bosai/map.html#5/38.411/143.987/&elem=info&contents=tsunami)")
     return "\n".join(lines).rstrip()
 
 
