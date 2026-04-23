@@ -774,7 +774,7 @@ async def _get_forecast(area_code: str) -> str:
                 if len(vals) >= 2:
                     lines.append(f"  {date_key}: 最高{max(vals)}°C / 最低{min(vals)}°C")
                 elif len(vals) == 1:
-                    lines.append(f"  {date_key}: {vals[0]}°C")
+                    lines.append(f"  {date_key}: 最高{vals[0]}°C")
             lines.append("")
 
     lines.append(f"出典: 気象庁 https://www.jma.go.jp/bosai/forecast/#area_type=offices&area_code={area_code}")
