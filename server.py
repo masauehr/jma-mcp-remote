@@ -754,18 +754,32 @@ async def _get_forecast(area_code: str) -> str:
                 lines.append(f"  {date_key}: {' '.join(pop_by_date[date_key])}")
             lines.append("")
 
-        # 気温（timeDefinesの時刻で判定: 6〜18時=最高、それ以外=最低）
+        # 気温（日付ごとの最初のエントリ時刻で当日/翌日以降を判定）
+        # 当日発表: [今日09:00(日中最高), 今日00:00(全日最高), 明日00:00(最低), 明日09:00(最高)]
+        # 夜間発表: [明日00:00(最低), 明日09:00(最高)]
+        # → 日付内の最初エントリが6時以降なら当日扱い(すべて最高)、0時なら翌日扱い(00:00=最低)
         if "temps" in area:
             lines.append("■ 気温")
             temp_by_date: dict = {}
             temp_order: list = []
+            date_first_hour: dict = {}
             wdays = ["月", "火", "水", "木", "金", "土", "日"]
             for i, temp in enumerate(area["temps"]):
                 if i >= len(time_defines) or not temp:
                     continue
                 dt = datetime.fromisoformat(time_defines[i]).astimezone(JST)
                 date_key = f"{dt.month}月{dt.day}日({wdays[dt.weekday()]})"
-                kind = "max" if 6 <= dt.hour < 18 else "min"
+                if date_key not in date_first_hour:
+                    date_first_hour[date_key] = dt.hour
+            for i, temp in enumerate(area["temps"]):
+                if i >= len(time_defines) or not temp:
+                    continue
+                dt = datetime.fromisoformat(time_defines[i]).astimezone(JST)
+                date_key = f"{dt.month}月{dt.day}日({wdays[dt.weekday()]})"
+                if date_first_hour[date_key] >= 6:
+                    kind = "max"
+                else:
+                    kind = "max" if 6 <= dt.hour < 18 else "min"
                 if date_key not in temp_by_date:
                     temp_by_date[date_key] = {}
                     temp_order.append(date_key)
