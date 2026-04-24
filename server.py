@@ -733,6 +733,24 @@ async def _get_forecast(area_code: str) -> str:
                     lines.append(f"  {date_str}: {weather}")
             lines.append("")
 
+        # 風
+        if "winds" in area:
+            lines.append("■ 風")
+            for i, wind in enumerate(area["winds"]):
+                if i < len(time_defines):
+                    date_str = format_date_jp(time_defines[i])
+                    lines.append(f"  {date_str}: {wind}")
+            lines.append("")
+
+        # 波（沿岸地域のみ）
+        if "waves" in area:
+            lines.append("■ 波")
+            for i, wave in enumerate(area["waves"]):
+                if i < len(time_defines):
+                    date_str = format_date_jp(time_defines[i])
+                    lines.append(f"  {date_str}: {wave}")
+            lines.append("")
+
         # 降水確率（時刻を時間帯ラベルに変換して日付ごとに集約）
         if "pops" in area:
             lines.append("■ 降水確率")
@@ -841,6 +859,15 @@ async def _get_weekly_forecast(area_code: str) -> str:
                 if i < len(time_defines) and pop:
                     date_str = format_date_jp(time_defines[i])
                     lines.append(f"  {date_str}: {pop}%")
+            lines.append("")
+
+        # 信頼度（A=高・B=中・C=低）
+        if "reliabilities" in area:
+            lines.append("■ 信頼度")
+            for i, rel in enumerate(area["reliabilities"]):
+                if i < len(time_defines) and rel:
+                    date_str = format_date_jp(time_defines[i])
+                    lines.append(f"  {date_str}: {rel}")
             lines.append("")
 
         # 最高・最低気温
