@@ -754,7 +754,7 @@ async def _get_forecast(area_code: str) -> str:
                 lines.append(f"  {date_key}: {' '.join(pop_by_date[date_key])}")
             lines.append("")
 
-        # 気温（日付ごとに集約し、大きい方を最高・小さい方を最低として表示）
+        # 気温（timeDefinesの時刻で判定: 6〜18時=最高、それ以外=最低）
         if "temps" in area:
             lines.append("■ 気温")
             temp_by_date: dict = {}
@@ -765,16 +765,19 @@ async def _get_forecast(area_code: str) -> str:
                     continue
                 dt = datetime.fromisoformat(time_defines[i]).astimezone(JST)
                 date_key = f"{dt.month}月{dt.day}日({wdays[dt.weekday()]})"
+                kind = "max" if 6 <= dt.hour < 18 else "min"
                 if date_key not in temp_by_date:
-                    temp_by_date[date_key] = []
+                    temp_by_date[date_key] = {}
                     temp_order.append(date_key)
-                temp_by_date[date_key].append(int(temp))
+                temp_by_date[date_key][kind] = temp
             for date_key in temp_order:
-                vals = temp_by_date[date_key]
-                if len(vals) >= 2:
-                    lines.append(f"  {date_key}: 最高{max(vals)}°C / 最低{min(vals)}°C")
-                elif len(vals) == 1:
-                    lines.append(f"  {date_key}: 最高{vals[0]}°C")
+                t = temp_by_date[date_key]
+                parts = []
+                if "max" in t:
+                    parts.append(f"最高{t['max']}°C")
+                if "min" in t:
+                    parts.append(f"最低{t['min']}°C")
+                lines.append(f"  {date_key}: {' / '.join(parts)}")
             lines.append("")
 
     lines.append(f"出典: 気象庁 https://www.jma.go.jp/bosai/forecast/#area_type=offices&area_code={area_code}")
