@@ -52,6 +52,16 @@ SOUTEN_FLG_URL  = "https://www.data.jma.go.jp/cpd/souten/data/flg.json"
 # エルニーニョ監視速報ページ
 ELNINO_URL = "https://www.data.jma.go.jp/cpd/elnino/"
 
+# 潮位観測 API エンドポイント
+TIDE_BASE_URL  = "https://www.jma.go.jp/bosai/tidelevel/"
+TIDE_TIME_URL  = TIDE_BASE_URL + "data/tide/tide_time.json"
+TIDE_OBS_URL   = TIDE_BASE_URL + "data/tide/tide_obs_{date}_{code}.json"
+TIDE_ASTRO_URL = TIDE_BASE_URL + "const/tide_astro/tide_astro_{year}_{code}.json"
+TIDE_AREA_URL  = TIDE_BASE_URL + "const/tide_area.json"
+
+# 潮位観測所リスト（tide_area.json）のモジュールレベルキャッシュ
+_tide_area_cache: dict | None = None
+
 # 気象の状況 CSV エレメント定義
 # key → (表示名, CSVパス, 単位, ソート順)
 MDRR_ELEMENTS = {
@@ -168,6 +178,35 @@ def _find_longfcst_region_num(query: str) -> str | None:
         if query in name or name in query:
             return num
     return None
+
+
+def _get_tide_area_data() -> dict:
+    """tide_area.json をキャッシュ付きで取得する"""
+    global _tide_area_cache
+    if _tide_area_cache is None:
+        _tide_area_cache = fetch_json(TIDE_AREA_URL)
+    return _tide_area_cache
+
+
+def _find_tide_station(station_code: str) -> dict | None:
+    """観測点コードから観測所情報（name, addr, area_code, class30）を返す"""
+    try:
+        area_data = _get_tide_area_data()
+    except requests.exceptions.RequestException:
+        return None
+    for area_code, area_info in area_data.items():
+        for c30 in area_info.get("class30s", []):
+            for st in c30.get("stations", []):
+                if st.get("code") == station_code:
+                    return {
+                        "code": st.get("code", ""),
+                        "name": st.get("name", ""),
+                        "addr": st.get("addr", ""),
+                        "area_code": area_code,
+                        "class30": c30.get("code", ""),
+                    }
+    return None
+
 
 # 警報・注意報エリアコード → 地域名（class10s / class15s）
 WARNING_AREA_NAME_MAP = {
@@ -629,6 +668,50 @@ async def list_tools() -> list[Tool]:
                 "required": [],
             },
         ),
+        Tool(
+            name="get_tide_observation",
+            description=(
+                "潮位観測点コードを指定して現在の潮位（cm、TP基準）を取得する。"
+                "現在の観測潮位・天文潮位・気象偏差（潮位偏差 = 観測 − 天文）と"
+                "過去数時間の潮位推移（30分毎）を表示する。"
+                "台風や低気圧による高潮（異常な潮位上昇）の確認にも使える。"
+                "観測点コードが不明な場合は search_tide_stations で検索すること。"
+                "コード例: 209131=那覇, 209431=石垣, 130101=東京。"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "station_code": {
+                        "type": "string",
+                        "description": "潮位観測点コード（6桁数字、例: '209131'）",
+                    },
+                    "hours_back": {
+                        "type": "integer",
+                        "description": "過去何時間分のデータを表示するか（デフォルト3、最大12）",
+                    },
+                },
+                "required": ["station_code"],
+            },
+        ),
+        Tool(
+            name="search_tide_stations",
+            description=(
+                "潮位観測所を名前・住所キーワードで検索して観測点コードを調べる。"
+                "「那覇」「東京」「北海道」などのキーワードで観測所を探せる。"
+                "取得した観測点コードを get_tide_observation に渡して潮位を取得できる。"
+                "キーワード省略時は全国の観測所一覧（最大50件）を返す。"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "keyword": {
+                        "type": "string",
+                        "description": "検索キーワード（観測所名・住所・都道府県名など）。省略時は全国一覧",
+                    },
+                },
+                "required": [],
+            },
+        ),
     ]
 
 
@@ -689,6 +772,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         )
     elif name == "get_tsunami_info":
         result = await _get_tsunami_info()
+    elif name == "get_tide_observation":
+        result = await _get_tide_observation(
+            str(arguments.get("station_code", "")),
+            int(arguments.get("hours_back", 3)),
+        )
+    elif name == "search_tide_stations":
+        result = await _search_tide_stations(arguments.get("keyword", ""))
     else:
         result = f"エラー: 未知のツール '{name}'"
 
@@ -2119,6 +2209,190 @@ async def _get_tsunami_info() -> str:
 
     lines.append("出典: 気象庁 https://www.jma.go.jp/bosai/map.html#5/38.411/143.987/&elem=info&contents=tsunami")
     return "\n".join(lines).rstrip()
+
+
+async def _get_tide_observation(station_code: str, hours_back: int = 3) -> str:
+    """潮位観測データを取得して整形する"""
+    if not station_code:
+        return "エラー: station_code が指定されていません。search_tide_stations で観測点コードを調べてください。"
+    hours_back = max(1, min(12, hours_back))
+
+    # 基準時刻（最新観測時刻）を取得
+    try:
+        basetime_data = fetch_json(TIDE_TIME_URL)
+    except requests.exceptions.RequestException as e:
+        return f"エラー: 潮位基準時刻の取得に失敗しました。\n詳細: {e}"
+
+    basetime = datetime.fromisoformat(basetime_data["time"]).astimezone(JST)
+    datestr  = basetime.strftime("%Y%m%d")
+    year     = basetime.strftime("%Y")
+    mmdd     = basetime.strftime("%m%d")
+
+    # 観測所情報（名前・住所・URLパラメータ取得）
+    station_info = _find_tide_station(station_code)
+    station_label = f"{station_info['name']}（{station_code}）" if station_info else station_code
+
+    # 観測データを取得
+    obs_url = TIDE_OBS_URL.format(date=datestr, code=station_code)
+    try:
+        obs_data = fetch_json(obs_url)
+    except requests.exceptions.RequestException as e:
+        return (
+            f"エラー: 潮位観測データの取得に失敗しました（観測点: {station_label}）。\n"
+            f"観測点コードが正しいか search_tide_stations で確認してください。\n"
+            f"詳細: {e}"
+        )
+
+    tide     = obs_data.get("tide", [])
+    interval = obs_data.get("interval", 15)  # 秒単位（15秒間隔）
+
+    # 天文潮位を取得
+    astro_today: list | None = None
+    try:
+        astro_data  = fetch_json(TIDE_ASTRO_URL.format(year=year, code=station_code))
+        astro_today = astro_data.get("tide", {}).get(mmdd)
+    except requests.exceptions.RequestException:
+        pass
+
+    # 現在のrawインデックスを計算
+    elapsed_sec = basetime.hour * 3600 + basetime.minute * 60 + basetime.second
+    raw_idx     = int(elapsed_sec / interval)
+    actual_idx  = min(raw_idx, len(tide) - 1) if tide else -1
+
+    # 現在潮位
+    current_tide: int | None = None
+    if tide and actual_idx >= 0:
+        v = tide[actual_idx]
+        if v is not None and v != 32767:
+            current_tide = v
+
+    # 観測時刻（actual_idxから逆算）
+    obs_sec = actual_idx * interval
+    obs_h   = obs_sec // 3600
+    obs_m   = (obs_sec % 3600) // 60
+    obs_time_str = f"{obs_h:02d}:{obs_m:02d}"
+
+    def interp_astro(hourly: list, total_min: float) -> int | None:
+        """天文潮位を分単位で線形補間する"""
+        if not hourly:
+            return None
+        h    = int(total_min // 60)
+        frac = (total_min % 60) / 60
+        h    = min(h, len(hourly) - 1)
+        h1   = min(h + 1, len(hourly) - 1)
+        return round(hourly[h] + (hourly[h1] - hourly[h]) * frac)
+
+    obs_total_min  = obs_h * 60 + obs_m
+    astro_current  = interp_astro(astro_today, obs_total_min) if astro_today else None
+
+    deviation: int | None = None
+    if current_tide is not None and astro_current is not None:
+        deviation = current_tide - astro_current
+
+    # 過去N時間の推移（30分毎サンプリング）
+    step_raw   = max(1, 1800 // interval)
+    start_raw  = max(0, actual_idx - hours_back * 3600 // interval)
+    samples: list[tuple[str, int, int | None]] = []
+    for i in range(start_raw, actual_idx + 1, step_raw):
+        if i >= len(tide):
+            break
+        v = tide[i]
+        if v is None or v == 32767:
+            continue
+        t_sec  = i * interval
+        t_h    = t_sec // 3600
+        t_m    = (t_sec % 3600) // 60
+        astro_v = interp_astro(astro_today, t_h * 60 + t_m) if astro_today else None
+        samples.append((f"{t_h:02d}:{t_m:02d}", v, astro_v))
+
+    valid_vals = [v for _, v, _ in samples]
+    period_min = min(valid_vals) if valid_vals else None
+    period_max = max(valid_vals) if valid_vals else None
+
+    # JMA 潮位観測ページURL
+    if station_info:
+        jma_url = (
+            f"https://www.jma.go.jp/bosai/tidelevel/"
+            f"#area_type=class20s&area_code={station_info['area_code']}"
+            f"&point_code={station_code}&filter=0&class30s={station_info['class30']}"
+        )
+    else:
+        jma_url = "https://www.jma.go.jp/bosai/tidelevel/"
+
+    lines = [f"【潮位観測 — {station_label}】", ""]
+    if station_info and station_info["addr"]:
+        lines.append(f"所在地: {station_info['addr']}")
+    lines.append(f"データ基準時刻: {basetime.strftime('%Y/%m/%d %H:%M')} JST")
+    lines.append(f"最新観測時刻:   {obs_time_str}")
+    lines.append("")
+
+    if current_tide is not None:
+        lines.append(f"■ 現在潮位: {current_tide} cm（TP基準）")
+    else:
+        lines.append("■ 現在潮位: データなし")
+    if astro_current is not None:
+        lines.append(f"  天文潮位: {astro_current} cm")
+    if deviation is not None:
+        sign = "+" if deviation >= 0 else ""
+        lines.append(f"  気象偏差: {sign}{deviation} cm（観測 − 天文）")
+
+    if period_min is not None and period_max is not None:
+        lines.append("")
+        lines.append(f"■ 過去{hours_back}時間の範囲: {period_min}〜{period_max} cm")
+
+    if samples:
+        lines.append("")
+        lines.append(f"■ 過去{hours_back}時間の推移（30分毎）")
+        has_astro = any(a is not None for _, _, a in samples)
+        if has_astro:
+            lines.append("  時刻    観測   天文   偏差")
+        else:
+            lines.append("  時刻    観測")
+        for t, obs, astro_v in samples:
+            if has_astro:
+                dev_s   = f"{obs - astro_v:+4d}" if astro_v is not None else "   —"
+                astro_s = f"{astro_v:5d}"         if astro_v is not None else "    —"
+                lines.append(f"  {t}   {obs:4d}  {astro_s}  {dev_s}")
+            else:
+                lines.append(f"  {t}   {obs:4d}")
+
+    lines.append("")
+    lines.append(f"出典: 気象庁 潮位観測 {jma_url}")
+    return "\n".join(lines)
+
+
+async def _search_tide_stations(keyword: str = "") -> str:
+    """潮位観測所をキーワードで検索する"""
+    try:
+        area_data = _get_tide_area_data()
+    except requests.exceptions.RequestException as e:
+        return f"エラー: 観測所リストの取得に失敗しました。\n詳細: {e}"
+
+    results: list[dict] = []
+    for area_code, area_info in area_data.items():
+        for c30 in area_info.get("class30s", []):
+            for st in c30.get("stations", []):
+                name = st.get("name", "")
+                addr = st.get("addr", "")
+                code = st.get("code", "")
+                if not keyword or keyword in name or keyword in addr:
+                    results.append({"code": code, "name": name, "addr": addr})
+
+    if not results:
+        return f"「{keyword}」に一致する潮位観測所が見つかりませんでした。"
+
+    header = f"「{keyword}」の潮位観測所: {len(results)}件" if keyword else f"潮位観測所 一覧: {len(results)}件"
+    lines  = [header, ""]
+
+    for st in results[:50]:
+        lines.append(f"  {st['code']}  {st['name']}  {st['addr']}")
+
+    if len(results) > 50:
+        lines.append(f"  ...（全{len(results)}件、上位50件のみ表示）")
+
+    lines.append("")
+    lines.append("出典: 気象庁 https://www.jma.go.jp/bosai/tidelevel/")
+    return "\n".join(lines)
 
 
 def create_app() -> Starlette:

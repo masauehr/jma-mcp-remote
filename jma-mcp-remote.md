@@ -26,7 +26,7 @@ Render にデプロイし、Claude.ai Web版・デスクトップアプリ・iPh
 | 対応クライアント | Claude Code（CLI） | Claude.ai Web・デスクトップアプリ・iPhone版 |
 | 設定ファイル | `.mcp.json`（command/args） | `.mcp.json` または Claude.ai 設定（url） |
 | コスト | 無料（ローカル実行） | Render 無料プラン（スリープあり） |
-| ツール内容 | 全19種 | 同一（server.py を共有） |
+| ツール内容 | 全21種 | 同一（server.py を共有） |
 
 ---
 
