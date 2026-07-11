@@ -1,6 +1,6 @@
 # jma-mcp-remote — JMA MCP サーバー リモート版（HTTP/SSE）
 
-詳しくは [jma-mcp-remote.md](jma-mcp-remote.md) を参照。
+詳しくは [jma-mcp-remote.md](jma-mcp-remote.md)（本プロジェクト固有情報）・[jma-mcp.md](jma-mcp.md)（共有ツール一覧・出力フォーマット等）を参照。
 
 ---
 

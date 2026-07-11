@@ -1,7 +1,8 @@
 # jma-mcp-remote — JMA MCP サーバー リモート版（HTTP/SSE）
 
-`jma_mcp`（stdio ローカル版）をベースに HTTP/SSE 通信へ切り替えたリモートデプロイ版。
+[jma-mcp](jma-mcp.md)（stdio ローカル版）をベースに HTTP/SSE 通信へ切り替えたリモートデプロイ版。
 Render にデプロイし、Claude.ai Web版・デスクトップアプリ・iPhone版から使用する。
+ツール一覧・element キー一覧・出力フォーマットなどの詳細は [jma-mcp.md](jma-mcp.md) を参照（server.py を共有しているため内容は同一）。
 
 ---
 
