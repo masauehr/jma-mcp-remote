@@ -91,6 +91,9 @@ MDRR_ELEMENTS = {
     "snd72h":   ("72時間降雪量",  "snc_rct/alltable/snd72h00_rct.csv",      "cm",   "desc", None, None, None, None),
 }
 
+# element="pre_all" 指定時にまとめて日最大値ランキングを取得する降水量要素の一覧
+PRECIP_ALL_ELEMENTS = ["pre1h", "pre3h", "pre6h", "pre12h", "pre24h", "pre48h", "pre72h"]
+
 # 警報・注意報コード → 名称マッピング（気象庁TELOPS準拠）
 # 出典: https://xml.kishou.go.jp/tec_material.html
 #   コード管理表一式 jmaxml_20260326_code.xlsx / WeatherWarning シート（令和8年3月26日更新）
@@ -410,7 +413,9 @@ async def list_tools() -> list[Tool]:
                 "element(必須): mxtem=最高気温, mntem=最低気温, pre24h=日降水量, "
                 "mxwsp=最大風速, gust=最大瞬間風速, snc=積雪, "
                 "pre1h/pre3h/pre6h/pre12h/pre48h/pre72h=降水量, predaily=日降水量, "
-                "mxsnc=最深積雪, snd3h/snd6h/snd12h/snd24h/snd48h/snd72h=降雪量。"
+                "mxsnc=最深積雪, snd3h/snd6h/snd12h/snd24h/snd48h/snd72h=降雪量, "
+                "pre_all=降水量の全時間区分(1h/3h/6h/12h/24h/48h/72h)の日最大値ランキングをまとめて取得"
+                "（「降水量の日最大ランキングを教えて」のような時間区分を指定しない質問で使う。daily_maxは無視され常に日最大値を使う）。"
                 "prefecture: 都道府県名（例: '沖縄', '北海道'）で絞り込み。"
                 "top_n: 上位N件（デフォルト20）。"
                 "各地点の値が記録された時刻を毎行表示する（風・気温は起時、それ以外は現在時刻）。"
@@ -1247,6 +1252,14 @@ async def _get_early_warning(area_code: str) -> str:
 
 async def _get_mdrr_data(element: str, prefecture: str = "", top_n: int = 20, daily_max: bool = False) -> str:
     """気象の状況CSVを取得して整形する"""
+    if element == "pre_all":
+        # 降水量の全時間区分(1h/3h/6h/12h/24h/48h/72h)の日最大値ランキングをまとめて返す
+        sections = [
+            await _get_mdrr_data(dur, prefecture, top_n, True)
+            for dur in PRECIP_ALL_ELEMENTS
+        ]
+        return "\n\n".join(sections)
+
     if element not in MDRR_ELEMENTS:
         keys = ", ".join(MDRR_ELEMENTS.keys())
         return f"エラー: 不明な要素 '{element}'。\n使用可能なキー: {keys}"
