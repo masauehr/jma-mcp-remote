@@ -63,28 +63,30 @@ TIDE_AREA_URL  = TIDE_BASE_URL + "const/tide_area.json"
 _tide_area_cache: dict | None = None
 
 # 気象の状況 CSV エレメント定義
-# key → (表示名, CSVパス, 単位, ソート順)
+# key → (表示名, CSVパス, 単位, ソート順, 風向の列インデックス, 起時(時,分)の列インデックス)
+# 風向・起時列インデックスは None の場合「現在時刻」列（年月日時分）をそのまま観測時刻として使う。
+# 起時列がある要素（風・気温）は、値が記録された時刻が「現在時刻」と異なりうるため専用の列を参照する。
 MDRR_ELEMENTS = {
-    "pre1h":    ("1時間降水量",   "pre_rct/alltable/pre1h00_rct.csv",       "mm",   "desc"),
-    "pre3h":    ("3時間降水量",   "pre_rct/alltable/pre3h00_rct.csv",       "mm",   "desc"),
-    "pre6h":    ("6時間降水量",   "pre_rct/alltable/pre6h00_rct.csv",       "mm",   "desc"),
-    "pre12h":   ("12時間降水量",  "pre_rct/alltable/pre12h00_rct.csv",      "mm",   "desc"),
-    "pre24h":   ("24時間降水量",  "pre_rct/alltable/pre24h00_rct.csv",      "mm",   "desc"),
-    "pre48h":   ("48時間降水量",  "pre_rct/alltable/pre48h00_rct.csv",      "mm",   "desc"),
-    "pre72h":   ("72時間降水量",  "pre_rct/alltable/pre72h00_rct.csv",      "mm",   "desc"),
-    "predaily": ("日降水量",      "pre_rct/alltable/predaily00_rct.csv",    "mm",   "desc"),
-    "mxwsp":    ("最大風速",      "wind_rct/alltable/mxwsp00_rct.csv",      "m/s",  "desc"),
-    "gust":     ("最大瞬間風速",  "wind_rct/alltable/gust00_rct.csv",       "m/s",  "desc"),
-    "mxtem":    ("最高気温",      "tem_rct/alltable/mxtemsadext00_rct.csv", "℃",   "desc"),
-    "mntem":    ("最低気温",      "tem_rct/alltable/mntemsadext00_rct.csv", "℃",   "asc"),
-    "snc":      ("現在の積雪",    "snc_rct/alltable/snc00_rct.csv",         "cm",   "desc"),
-    "mxsnc":    ("最深積雪",      "snc_rct/alltable/mxsnc00_rct.csv",       "cm",   "desc"),
-    "snd3h":    ("3時間降雪量",   "snc_rct/alltable/snd3h00_rct.csv",       "cm",   "desc"),
-    "snd6h":    ("6時間降雪量",   "snc_rct/alltable/snd6h00_rct.csv",       "cm",   "desc"),
-    "snd12h":   ("12時間降雪量",  "snc_rct/alltable/snd12h00_rct.csv",      "cm",   "desc"),
-    "snd24h":   ("24時間降雪量",  "snc_rct/alltable/snd24h00_rct.csv",      "cm",   "desc"),
-    "snd48h":   ("48時間降雪量",  "snc_rct/alltable/snd48h00_rct.csv",      "cm",   "desc"),
-    "snd72h":   ("72時間降雪量",  "snc_rct/alltable/snd72h00_rct.csv",      "cm",   "desc"),
+    "pre1h":    ("1時間降水量",   "pre_rct/alltable/pre1h00_rct.csv",       "mm",   "desc", None, None),
+    "pre3h":    ("3時間降水量",   "pre_rct/alltable/pre3h00_rct.csv",       "mm",   "desc", None, None),
+    "pre6h":    ("6時間降水量",   "pre_rct/alltable/pre6h00_rct.csv",       "mm",   "desc", None, None),
+    "pre12h":   ("12時間降水量",  "pre_rct/alltable/pre12h00_rct.csv",      "mm",   "desc", None, None),
+    "pre24h":   ("24時間降水量",  "pre_rct/alltable/pre24h00_rct.csv",      "mm",   "desc", None, None),
+    "pre48h":   ("48時間降水量",  "pre_rct/alltable/pre48h00_rct.csv",      "mm",   "desc", None, None),
+    "pre72h":   ("72時間降水量",  "pre_rct/alltable/pre72h00_rct.csv",      "mm",   "desc", None, None),
+    "predaily": ("日降水量",      "pre_rct/alltable/predaily00_rct.csv",    "mm",   "desc", None, None),
+    "mxwsp":    ("最大風速",      "wind_rct/alltable/mxwsp00_rct.csv",      "m/s",  "desc", 11,   (13, 14)),
+    "gust":     ("最大瞬間風速",  "wind_rct/alltable/gust00_rct.csv",       "m/s",  "desc", 11,   (13, 14)),
+    "mxtem":    ("最高気温",      "tem_rct/alltable/mxtemsadext00_rct.csv", "℃",   "desc", None, (11, 12)),
+    "mntem":    ("最低気温",      "tem_rct/alltable/mntemsadext00_rct.csv", "℃",   "asc",  None, (11, 12)),
+    "snc":      ("現在の積雪",    "snc_rct/alltable/snc00_rct.csv",         "cm",   "desc", None, None),
+    "mxsnc":    ("最深積雪",      "snc_rct/alltable/mxsnc00_rct.csv",       "cm",   "desc", None, None),
+    "snd3h":    ("3時間降雪量",   "snc_rct/alltable/snd3h00_rct.csv",       "cm",   "desc", None, None),
+    "snd6h":    ("6時間降雪量",   "snc_rct/alltable/snd6h00_rct.csv",       "cm",   "desc", None, None),
+    "snd12h":   ("12時間降雪量",  "snc_rct/alltable/snd12h00_rct.csv",      "cm",   "desc", None, None),
+    "snd24h":   ("24時間降雪量",  "snc_rct/alltable/snd24h00_rct.csv",      "cm",   "desc", None, None),
+    "snd48h":   ("48時間降雪量",  "snc_rct/alltable/snd48h00_rct.csv",      "cm",   "desc", None, None),
+    "snd72h":   ("72時間降雪量",  "snc_rct/alltable/snd72h00_rct.csv",      "cm",   "desc", None, None),
 }
 
 # 警報・注意報コード → 名称マッピング（気象庁TELOPS準拠）
@@ -409,6 +411,8 @@ async def list_tools() -> list[Tool]:
                 "mxsnc=最深積雪, snd3h/snd6h/snd12h/snd24h/snd48h/snd72h=降雪量。"
                 "prefecture: 都道府県名（例: '沖縄', '北海道'）で絞り込み。"
                 "top_n: 上位N件（デフォルト20）。"
+                "各地点の値が記録された時刻を毎行表示する（風・気温は起時、それ以外は現在時刻）。"
+                "mxwsp/gustのみ、その時刻の風向も併せて表示する。"
             ),
             inputSchema={
                 "type": "object",
@@ -1237,7 +1241,7 @@ async def _get_mdrr_data(element: str, prefecture: str = "", top_n: int = 20) ->
         keys = ", ".join(MDRR_ELEMENTS.keys())
         return f"エラー: 不明な要素 '{element}'。\n使用可能なキー: {keys}"
 
-    label, csv_path, unit, sort_order = MDRR_ELEMENTS[element]
+    label, csv_path, unit, sort_order, dir_idx, occ_idx = MDRR_ELEMENTS[element]
     url = f"{MDRR_BASE_URL}/{csv_path}"
 
     try:
@@ -1285,13 +1289,26 @@ async def _get_mdrr_data(element: str, prefecture: str = "", top_n: int = 20) ->
         except (ValueError, TypeError):
             continue
 
-        # 観測時刻
+        # 観測時刻(値が記録された時刻。起時列があればそれを使い、なければ現在時刻列を使う)
         try:
-            obs_time = f"{cols[IDX_YEAR]}/{cols[IDX_MON]}/{cols[IDX_DAY]} {cols[IDX_HOUR]}:{cols[IDX_MIN]}"
+            if occ_idx is not None:
+                occ_hour = cols[occ_idx[0]].strip()
+                occ_min = cols[occ_idx[1]].strip()
+                obs_time = f"{cols[IDX_MON]}/{cols[IDX_DAY]} {occ_hour}:{occ_min}" if occ_hour and occ_min else ""
+            else:
+                obs_time = f"{cols[IDX_YEAR]}/{cols[IDX_MON]}/{cols[IDX_DAY]} {cols[IDX_HOUR]}:{cols[IDX_MIN]}"
         except IndexError:
             obs_time = ""
 
-        records.append({"pref": pref, "name": name, "value": val, "time": obs_time})
+        # 風向(風要素のみ)
+        direction = ""
+        if dir_idx is not None:
+            try:
+                direction = cols[dir_idx].strip()
+            except IndexError:
+                direction = ""
+
+        records.append({"pref": pref, "name": name, "value": val, "time": obs_time, "direction": direction})
 
     if not records:
         pref_msg = f"（{prefecture}）" if prefecture else ""
@@ -1317,13 +1334,18 @@ async def _get_mdrr_data(element: str, prefecture: str = "", top_n: int = 20) ->
     ]
 
     rank_label = "上位" if reverse else "下位"
-    lines_out.append(f"{'順位':<4} {'都道府県':<14} {'地点':<22} {value_col_name}")
-    lines_out.append("─" * 65)
+    has_direction = dir_idx is not None
+    header_cols = f"{'順位':<4} {'都道府県':<14} {'地点':<22} {value_col_name:<10} {'時刻':<12}"
+    if has_direction:
+        header_cols += " 風向"
+    lines_out.append(header_cols)
+    lines_out.append("─" * (78 if has_direction else 65))
 
     for i, rec in enumerate(records, 1):
-        lines_out.append(
-            f"{i:<4} {rec['pref']:<14} {rec['name']:<22} {rec['value']}"
-        )
+        row = f"{i:<4} {rec['pref']:<14} {rec['name']:<22} {rec['value']:<10} {rec['time']:<12}"
+        if has_direction:
+            row += f" {rec['direction']}"
+        lines_out.append(row)
 
     total = len(records)
     lines_out.append(f"\n表示: {total}件")
