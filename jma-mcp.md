@@ -216,7 +216,7 @@ Claude Code（結果を受け取り、回答に組み込む）
 
 | ツール名 | 説明 | 主な引数 |
 |---|---|---|
-| `get_mdrr_data` | 全国観測所の最新値を取得（降水量・気温・風速・積雪 等 20種）。各地点の値が記録された時刻を毎行表示し、風速系（`mxwsp`/`gust`）は風向も併せて表示 | `element`（必須）, `prefecture`, `top_n` |
+| `get_mdrr_data` | 全国観測所の最新値を取得（降水量・気温・風速・積雪 等 20種）。各地点の値が記録された時刻を毎行表示し、風速系（`mxwsp`/`gust`）は風向も併せて表示。降水要素は`daily_max=true`で「現在値」ではなく「本日の最大値」でランキング可能 | `element`（必須）, `prefecture`, `top_n`, `daily_max` |
 | `get_daily_ranking` | 全国観測値ランキング（上位10地点）を取得 | `date`（MM/DD）, `element` |
 | `get_record_update` | 観測史上1位の値 更新状況を取得 | `date`（MM/DD） |
 
