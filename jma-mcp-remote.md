@@ -76,6 +76,33 @@ Uvicorn running on http://0.0.0.0:XXXXX
 
 ---
 
+## 認証（OAuth 2.1 + Dynamic Client Registration）
+
+### 背景
+
+2026-08-06、Claude.ai のカスタムコネクタ登録で「サインインサービスに登録できませんでした。もう一度お試しいただくか、コネクタ設定でOAuth Client IDを追加してください」というエラーが発生した。Claude.ai 等のホスト型コネクタは接続時にOAuthメタデータ・Dynamic Client Registration (DCR) を自動で試行する仕様になっており、対応していないサーバーはこのエラーになる。サーバー自体は正常稼働していたが（`curl` で直接 `/sse` に接続するとSSEストリームは問題なく返っていた）、OAuth関連のエンドポイントが存在しなかったことが原因だった。
+
+これに対応するため、簡易的な OAuth 2.1 + DCR を `server.py` に実装した。
+
+### 設計方針
+
+- 本サーバーが扱うのは気象庁の公開データのみで、個人アカウントという概念が存在しない。そのため `/authorize` はログイン画面を挟まず、リクエストされた時点で即座に認可コードを発行する「素通し」の実装とした。目的はホスト型コネクタが要求するOAuthのプロトコル形状（DCR → 認可コード → アクセストークン）を満たして正常接続できるようにすることであり、利用者を認証・識別するものではない。
+- クライアント登録情報・認可コード・アクセストークンはすべてインメモリ保持。プロセス再起動（Render無料プランのスリープ復帰等）で消えるが、クライアント側が自動的に再登録・再認可を行うため問題ない。
+
+### 追加されたエンドポイント
+
+| エンドポイント | 用途 |
+|---|---|
+| `GET /.well-known/oauth-authorization-server` | 認可サーバーメタデータ（RFC 8414） |
+| `GET /.well-known/oauth-protected-resource` | 保護対象リソースメタデータ（RFC 9728） |
+| `POST /register` | Dynamic Client Registration（RFC 7591） |
+| `GET /authorize` | 認可エンドポイント（PKCE対応、即時リダイレクト） |
+| `POST /token` | トークンエンドポイント（authorization_code / refresh_token） |
+
+`/sse` と `/messages/` は `Authorization: Bearer <token>` ヘッダーが必須になった。未認証アクセスには `401` と `WWW-Authenticate` ヘッダー（`resource_metadata` を指す）を返す。Claude Code の `.mcp.json` 経由（`url` 直指定）で使う場合は、クライアントがOAuthフローに対応していないとトークンを取得できず接続できなくなる点に注意。
+
+---
+
 ## Claude.ai への接続手順
 
 ### Web版・デスクトップアプリ・iPhone版 共通
@@ -143,4 +170,4 @@ Claude.ai では CLAUDE.md が読み込まれないため、出典URLを表示�
 
 `jma_mcp/server.py` にツールを追加した場合は `jma_mcp_remote/server.py` にも反映すること。
 
-差分は起動部分（`main()` → `create_app()`）のみ。ツールの実装は同一。
+差分は起動部分（`main()` → `create_app()`）と、リモート版のみが持つOAuth 2.1 + DCR実装（上記「認証」セクション参照）。ツールの実装自体は同一。

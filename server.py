@@ -4,10 +4,15 @@ JMA MCP サーバー（リモート HTTP/SSE 版）
 Render 等のクラウド環境にデプロイして使用する。
 """
 import asyncio
+import base64
+import hashlib
 import os
 import re
+import secrets
 import sys
+import time
 from datetime import datetime, timezone, timedelta
+from urllib.parse import quote
 
 import requests
 import uvicorn
@@ -15,7 +20,10 @@ from mcp.server import Server
 from mcp.server.sse import SseServerTransport
 from mcp.types import TextContent, Tool
 from starlette.applications import Starlette
-from starlette.responses import Response
+from starlette.middleware import Middleware
+from starlette.middleware.cors import CORSMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route
 
 from areas import AREA_CODE_MAP, search_area_by_name
@@ -2444,11 +2452,214 @@ async def _search_tide_stations(keyword: str = "") -> str:
     return "\n".join(lines)
 
 
+# =====================================================================
+# 簡易 OAuth 2.1 認可サーバー（Dynamic Client Registration 対応）
+# -----------------------------------------------------------------
+# 本サーバーが扱うのは気象庁の公開情報のみで、個人アカウントという
+# 概念が存在しない。そのため /authorize はログイン画面を挟まず、
+# リクエストされた時点で即座に認可コードを発行する「素通し」の
+# 実装とする。目的は Claude.ai 等ホスト型コネクタが要求する
+# OAuth のプロトコル形状（DCR → 認可コード → アクセストークン）
+# を満たし、正常に接続できるようにすることであり、実利用者を
+# 認証・識別するものではない。
+#
+# 登録情報・コード・トークンはすべてインメモリ保持のため、
+# プロセス再起動（Render 無料プランのスリープ復帰等）で消える。
+# その場合クライアントは自動的に再登録・再認可を行う。
+# =====================================================================
+
+ACCESS_TOKEN_TTL = 3600  # 秒（1時間）
+AUTH_CODE_TTL = 60       # 秒（認可コードの有効期限）
+
+_oauth_clients: dict[str, dict] = {}
+_oauth_auth_codes: dict[str, dict] = {}
+_oauth_access_tokens: dict[str, dict] = {}
+_oauth_refresh_tokens: dict[str, dict] = {}
+
+
+def _is_authorized(request: Request) -> bool:
+    """Authorization: Bearer ヘッダーの有効性を確認する"""
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return False
+    token = auth_header[len("Bearer "):]
+    entry = _oauth_access_tokens.get(token)
+    if entry is None:
+        return False
+    if entry["expires_at"] < time.time():
+        del _oauth_access_tokens[token]
+        return False
+    return True
+
+
+def _unauthorized_response(request: Request) -> Response:
+    resource_metadata_url = str(request.base_url) + ".well-known/oauth-protected-resource"
+    return Response(
+        status_code=401,
+        headers={"WWW-Authenticate": f'Bearer resource_metadata="{resource_metadata_url}"'},
+    )
+
+
+async def oauth_authorization_server_metadata(request: Request) -> JSONResponse:
+    """RFC 8414: 認可サーバーメタデータ"""
+    base = str(request.base_url).rstrip("/")
+    return JSONResponse({
+        "issuer": base,
+        "authorization_endpoint": f"{base}/authorize",
+        "token_endpoint": f"{base}/token",
+        "registration_endpoint": f"{base}/register",
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "code_challenge_methods_supported": ["S256", "plain"],
+        "token_endpoint_auth_methods_supported": ["none"],
+    })
+
+
+async def oauth_protected_resource_metadata(request: Request) -> JSONResponse:
+    """RFC 9728: 保護対象リソースメタデータ"""
+    base = str(request.base_url).rstrip("/")
+    return JSONResponse({
+        "resource": base,
+        "authorization_servers": [base],
+    })
+
+
+async def register_client(request: Request) -> JSONResponse:
+    """RFC 7591: Dynamic Client Registration"""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    client_id = secrets.token_urlsafe(16)
+    redirect_uris = body.get("redirect_uris", [])
+    _oauth_clients[client_id] = {
+        "client_id": client_id,
+        "redirect_uris": redirect_uris,
+        "client_name": body.get("client_name", ""),
+        "created_at": time.time(),
+    }
+    return JSONResponse(
+        {
+            "client_id": client_id,
+            "redirect_uris": redirect_uris,
+            "token_endpoint_auth_method": "none",
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+        },
+        status_code=201,
+    )
+
+
+async def authorize(request: Request):
+    """認可エンドポイント。ログイン画面なしで即座にコードを発行する"""
+    params = request.query_params
+    client_id = params.get("client_id")
+    redirect_uri = params.get("redirect_uri")
+    state = params.get("state", "")
+    response_type = params.get("response_type")
+    code_challenge = params.get("code_challenge")
+    code_challenge_method = params.get("code_challenge_method", "plain")
+
+    client = _oauth_clients.get(client_id)
+    if not client or response_type != "code":
+        return Response("invalid_request: unknown client_id or response_type", status_code=400)
+    if not redirect_uri or (client["redirect_uris"] and redirect_uri not in client["redirect_uris"]):
+        return Response("invalid_request: redirect_uri mismatch", status_code=400)
+
+    code = secrets.token_urlsafe(24)
+    _oauth_auth_codes[code] = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "code_challenge": code_challenge,
+        "code_challenge_method": code_challenge_method,
+        "expires_at": time.time() + AUTH_CODE_TTL,
+    }
+
+    sep = "&" if "?" in redirect_uri else "?"
+    location = f"{redirect_uri}{sep}code={code}"
+    if state:
+        location += f"&state={quote(state)}"
+    return RedirectResponse(location, status_code=302)
+
+
+async def token_endpoint(request: Request) -> JSONResponse:
+    """トークンエンドポイント（authorization_code / refresh_token）"""
+    form = await request.form()
+    grant_type = form.get("grant_type")
+
+    if grant_type == "authorization_code":
+        code = form.get("code")
+        redirect_uri = form.get("redirect_uri")
+        code_verifier = form.get("code_verifier")
+
+        entry = _oauth_auth_codes.pop(code, None)
+        if not entry or entry["expires_at"] < time.time():
+            return JSONResponse({"error": "invalid_grant"}, status_code=400)
+        if entry["redirect_uri"] != redirect_uri:
+            return JSONResponse(
+                {"error": "invalid_grant", "error_description": "redirect_uri mismatch"},
+                status_code=400,
+            )
+        if entry["code_challenge"]:
+            if not code_verifier:
+                return JSONResponse(
+                    {"error": "invalid_grant", "error_description": "code_verifier required"},
+                    status_code=400,
+                )
+            if entry["code_challenge_method"] == "S256":
+                digest = hashlib.sha256(code_verifier.encode()).digest()
+                computed = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+            else:
+                computed = code_verifier
+            if computed != entry["code_challenge"]:
+                return JSONResponse(
+                    {"error": "invalid_grant", "error_description": "code_verifier mismatch"},
+                    status_code=400,
+                )
+
+        access_token = secrets.token_urlsafe(32)
+        refresh_token = secrets.token_urlsafe(32)
+        _oauth_access_tokens[access_token] = {
+            "client_id": entry["client_id"],
+            "expires_at": time.time() + ACCESS_TOKEN_TTL,
+        }
+        _oauth_refresh_tokens[refresh_token] = {"client_id": entry["client_id"]}
+        return JSONResponse({
+            "access_token": access_token,
+            "token_type": "Bearer",
+            "expires_in": ACCESS_TOKEN_TTL,
+            "refresh_token": refresh_token,
+        })
+
+    elif grant_type == "refresh_token":
+        refresh_token = form.get("refresh_token")
+        entry = _oauth_refresh_tokens.get(refresh_token)
+        if not entry:
+            return JSONResponse({"error": "invalid_grant"}, status_code=400)
+
+        access_token = secrets.token_urlsafe(32)
+        _oauth_access_tokens[access_token] = {
+            "client_id": entry["client_id"],
+            "expires_at": time.time() + ACCESS_TOKEN_TTL,
+        }
+        return JSONResponse({
+            "access_token": access_token,
+            "token_type": "Bearer",
+            "expires_in": ACCESS_TOKEN_TTL,
+            "refresh_token": refresh_token,
+        })
+
+    return JSONResponse({"error": "unsupported_grant_type"}, status_code=400)
+
+
 def create_app() -> Starlette:
     """SSE ベースの Starlette アプリを生成する"""
     sse = SseServerTransport("/messages/")
 
     async def handle_sse(request):
+        if not _is_authorized(request):
+            return _unauthorized_response(request)
         async with sse.connect_sse(
             request.scope, request.receive, request._send
         ) as streams:
@@ -2457,11 +2668,27 @@ def create_app() -> Starlette:
             )
         return Response()
 
+    async def handle_messages(scope, receive, send):
+        request = Request(scope, receive)
+        if not _is_authorized(request):
+            response = _unauthorized_response(request)
+            await response(scope, receive, send)
+            return
+        await sse.handle_post_message(scope, receive, send)
+
     return Starlette(
         routes=[
+            Route("/.well-known/oauth-authorization-server", endpoint=oauth_authorization_server_metadata, methods=["GET"]),
+            Route("/.well-known/oauth-protected-resource", endpoint=oauth_protected_resource_metadata, methods=["GET"]),
+            Route("/register", endpoint=register_client, methods=["POST"]),
+            Route("/authorize", endpoint=authorize, methods=["GET"]),
+            Route("/token", endpoint=token_endpoint, methods=["POST"]),
             Route("/sse", endpoint=handle_sse, methods=["GET"]),
-            Mount("/messages/", app=sse.handle_post_message),
-        ]
+            Mount("/messages/", app=handle_messages),
+        ],
+        middleware=[
+            Middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]),
+        ],
     )
 
 
