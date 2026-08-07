@@ -2471,10 +2471,10 @@ async def _search_tide_stations(keyword: str = "") -> str:
 ACCESS_TOKEN_TTL = 3600  # 秒（1時間）
 AUTH_CODE_TTL = 60       # 秒（認可コードの有効期限）
 
-_oauth_clients: dict[str, dict] = {}
-_oauth_auth_codes: dict[str, dict] = {}
-_oauth_access_tokens: dict[str, dict] = {}
-_oauth_refresh_tokens: dict[str, dict] = {}
+_oauth_clients = {}
+_oauth_auth_codes = {}
+_oauth_access_tokens = {}
+_oauth_refresh_tokens = {}
 
 
 def _is_authorized(request: Request) -> bool:
