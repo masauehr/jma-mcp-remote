@@ -33,7 +33,7 @@ Render にデプロイし、Claude.ai Web版・デスクトップアプリ・iPh
 
 > **重要**: OAuth対応は `jma_mcp_remote/server.py` にのみ実装されており、`jma_mcp/server.py`（ローカルstdio版）は今回一切変更していない。stdioはClaude Codeがサブプロセスの標準入出力を直接読み書きする方式で、外部からアクセス可能なHTTPエンドポイントを持たないため、そもそも「誰でも接続できてしまう」というリスクが存在しない。OAuthはHTTP/SSEで外部公開するリモート版だけが必要とする仕組み。今後 `jma_mcp/server.py` にツールを追加した場合も、同期先の `jma_mcp_remote/server.py` 側は **ツール定義部分のみ** 反映すればよく、`create_app()` 以降のOAuth実装部分は触らなくてよい。
 
-> **2026-09-24 追記**: 2026-05-28 の防災気象情報の新体系移行（警報・早期注意情報・気象情報・台風情報の配信先が `data/r8/` などに移転）に対応した改修を、ローカル版と同じ内容でこのリモート版にも適用した。新ツール `get_warning_timeline`・`get_typhoon` を追加（全23種）。詳細は [jma-mcp.md](jma-mcp.md)。ツール定義・関数はローカル版と同一（OAuth 部分は無変更）。
+> **2026-09-24 追記**: 2026-05-28 の防災気象情報の新体系移行（警報・早期注意情報・気象情報・台風情報の配信先が `data/r8/` などに移転）に対応した改修を、ローカル版と同じ内容でこのリモート版にも適用した。新ツール `get_warning_timeline`・`get_typhoon` を追加（全23種）。`get_early_warning` の出力も新形式に変更。**デプロイ後の確認**: push → Render が自動デプロイ → OAuth の手順（`/register` → `/authorize` → `/token`）でトークンを取得して `/sse` に接続し、ツール数（23）と新ツールの動作を確認した（2026-09-24）。詳細は [jma-mcp.md](jma-mcp.md)。ツール定義・関数はローカル版と同一（OAuth 部分は無変更）。
 
 ---
 
@@ -44,6 +44,7 @@ jma_mcp_remote/
 ├── server.py          # jma_mcp/server.py から起動部分のみ SSE に変更
 ├── areas.py           # jma_mcp/areas.py からコピー
 ├── requirements.txt   # mcp(<2.0.0に固定), requests, uvicorn, starlette
+├── tests/             # テスト（jma_mcp と共通の新体系テスト。通信はダミー）
 ├── render.yaml        # Render デプロイ設定
 ├── README.md          # プロジェクト概要
 ├── jma-mcp-remote.md  # このファイル（詳細マニュアル）

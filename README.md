@@ -25,6 +25,7 @@ jma_mcp_remote/
 ├── server.py              # jma_mcp/server.py から起動部分のみ SSE に変更
 ├── areas.py               # jma_mcp/areas.py からコピー
 ├── requirements.txt       # mcp, requests, uvicorn, starlette
+├── tests/                 # テスト（jma_mcp と共通の新体系テスト。`/opt/homebrew/bin/python3 -m unittest discover -s tests`）
 ├── render.yaml            # Render デプロイ設定
 ├── jma-mcp-remote.md      # このプロジェクトの詳細マニュアル
 ├── .mcp.json              # Claude Code からリモート接続する場合の設定（gitignore済み）
@@ -43,7 +44,7 @@ jma_mcp_remote/
 
 ## 2026-05-28 の新体系（防災気象情報）への対応（2026-09-24）
 
-警報・早期注意情報・気象情報・台風情報の配信先が `data/r8/` に移転し形式も変わったため、ローカル版と同じ改修を適用した（旧パスは 5/28 のまま凍結）。新ツール `get_warning_timeline`（時系列情報）・`get_typhoon`（台風の実況・予報）を追加。詳細は [jma-mcp.md](jma-mcp.md)。テストは `tests/`（`/opt/homebrew/bin/python3 -m unittest discover -s tests`）。**Render への反映は GitHub への push 後（自動デプロイの設定次第）。**
+警報・早期注意情報・気象情報・台風情報の配信先が `data/r8/` に移転し形式も変わったため、ローカル版と同じ改修を適用した（旧パスは 5/28 のまま凍結）。新ツール `get_warning_timeline`（時系列情報）・`get_typhoon`（台風の実況・予報）を追加。`get_early_warning` の出力も新形式（地域ごとの表・全現象行・高/中/－・6時間ごと）に変更。詳細は [jma-mcp.md](jma-mcp.md)。テストは `tests/`（`/opt/homebrew/bin/python3 -m unittest discover -s tests`）。**Render への反映は GitHub への push 後（自動デプロイの設定次第）。**
 
 ## Claude.ai への接続
 
