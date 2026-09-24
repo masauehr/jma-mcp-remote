@@ -228,29 +228,101 @@ class InformationTest(unittest.TestCase):
 
 
 class EarlyWarningTest(unittest.TestCase):
-    def test_new_hazard_types_and_6h_labels(self):
-        def props(**kw):
-            return [{"type": t, "probabilities": p} for t, p in kw.items()]
-        data = [{"reportDatetime": "2026-09-24T11:00:00+09:00", "publishingOffice": "銚子地方気象台", "timeSeries": [
-            {"timeDefines": ["2026-09-24T12:00:00+09:00", "2026-09-24T18:00:00+09:00"],
+    """早期注意情報: 表示ルール（短期=6時間ごと・週間=日ごと・値は高/中/－・全現象行を表示）に合わせた出力"""
+
+    @staticmethod
+    def props(**kw):
+        return [{"type": t, "probabilities": p} for t, p in kw.items()]
+
+    def data(self):
+        p = self.props
+        return [{"reportDatetime": "2026-09-24T11:00:00+09:00", "publishingOffice": "銚子地方気象台", "timeSeries": [
+            {"timeDefines": ["2026-09-24T12:00:00+09:00", "2026-09-24T18:00:00+09:00", "2026-09-25T00:00:00+09:00"],
+             "timeDefineArray": [{"dateTime": "2026-09-24T12:00:00+09:00", "duration": "PT6H"},
+                                 {"dateTime": "2026-09-24T18:00:00+09:00", "duration": "PT6H"},
+                                 {"dateTime": "2026-09-25T00:00:00+09:00", "duration": "PT12H"}],
              "areas": [{"code": "120010", "text": "北西部では大雨に注意",
-                        "properties": props(**{"大雨の警報級の可能性": ["中", ""], "土砂災害の警報級の可能性": ["", "高"]})}]}]},
-            {"timeSeries": [{"timeDefines": ["2026-09-26T00:00:00+09:00"], "areas": [
-                {"code": "120000", "properties": props(**{"雨の警報級の可能性": ["中"]})}]}]}]
+                        "properties": p(**{"大雨の警報級の可能性": ["中", "", ""], "土砂災害の警報級の可能性": ["", "高", ""],
+                                           "雪の警報級の可能性": ["なし", "なし", "なし"]})}]}]},
+            {"timeSeries": [{"timeDefines": ["2026-09-26T00:00:00+09:00", "2026-09-27T00:00:00+09:00"], "areas": [
+                {"code": "120000", "properties": p(**{"雨の警報級の可能性": ["中", ""], "潮位の警報級の可能性": ["", "中"]})}]}]}]
+
+    def fmt(self, data=None):
+        return server.format_early_warning("千葉県", "120000", self.data() if data is None else data)
+
+    def rows(self, text):
+        return {line.split("|")[1].strip(): [c.strip() for c in line.split("|")[2:-1]]
+                for line in text.splitlines() if line.startswith("| ") and not line.startswith("| 現象")}
+
+    def test_short_term_table_headers_and_all_rows(self):
+        text = self.fmt()
+        self.assertIn("■ 短期（明後日まで・6時間ごと、一部の区分は12時間）", text)
+        self.assertIn("| 現象 | 9/24(木)12時〜 | 9/24(木)18時〜 | 9/25(金)0時〜 |", text)        # 開始時刻の見出し
+        short = text[text.index("■ 短期"):text.index("■ 週間")]
+        rows = self.rows(short)
+        self.assertEqual(rows["大雨"], ["中", "－", "－"])
+        self.assertEqual(rows["土砂災害"], ["－", "高", "－"])
+        self.assertEqual(rows["雪"], ["－", "－", "－"])                                     # 「なし」は「－」に統一
+        for name in ("風（風雪）", "波", "潮位"):                                              # データに無い現象も「－」で補う（省略しない）
+            self.assertEqual(rows[name], ["－", "－", "－"])
+        self.assertEqual(list(rows), ["大雨", "土砂災害", "雪", "風（風雪）", "波", "潮位"])   # 表示順が固定
+        self.assertNotIn("なし", short.replace("なし。", ""))                                  # 「なし」「空欄」が表に残らない
+
+    def test_weekly_table(self):
+        text = self.fmt()
+        week = text[text.index("■ 週間（明後日以降・日ごと）"):]
+        self.assertIn("| 現象 | 9/26(土) | 9/27(日) |", week)
+        rows = self.rows(week)
+        self.assertEqual(rows["雨"], ["中", "－"])
+        self.assertEqual(rows["潮位"], ["－", "中"])
+        self.assertEqual(list(rows), ["雨", "雪", "風（風雪）", "波", "潮位"])
+
+    def test_comment_and_summary_and_time(self):
+        text = self.fmt()
+        self.assertIn("気象台コメント（北西部）: 北西部では大雨に注意", text)
+        self.assertIn("発表: 9月24日(木) 11:00", text)
+        self.assertIn("■ 要約: 警報級の可能性が「高」「中」の区分があります", text)
+        self.assertIn("北西部の大雨（9/24(木)12時〜）: 中", text)
+        self.assertIn("北西部の土砂災害（9/24(木)18時〜）: 高", text)
+        self.assertIn("出典: 気象庁 https://www.jma.go.jp/bosai/probability/#area_type=offices&area_code=120000&lang=ja", text)
+
+    def test_all_dash_is_stated_and_rows_still_shown(self):
+        d = self.data()
+        for a in d[0]["timeSeries"][0]["areas"]:
+            for p in a["properties"]:
+                p["probabilities"] = [""] * 3
+        d[1]["timeSeries"][0]["areas"][0]["properties"] = self.props(**{"雨の警報級の可能性": ["", ""]})
+        text = self.fmt(d)
+        self.assertIn("「高」「中」の区分はありません（すべて「－」）", text)
+        self.assertEqual(self.rows(text[text.index("■ 短期"):text.index("■ 週間")])["大雨"], ["－", "－", "－"])   # 行は省略しない
+
+    def test_unexpected_type_and_short_probabilities_do_not_break(self):
+        d = self.data()
+        d[0]["timeSeries"][0]["areas"][0]["properties"].append({"type": "新設現象の警報級の可能性", "probabilities": ["高"]})
+        rows = self.rows(self.fmt(d)[self.fmt(d).index("■ 短期"):])
+        self.assertEqual(rows["新設現象"], ["高", "－", "－"])                              # 未知の現象名も落とさず、不足は「－」で補う
+
+    def test_multiple_areas_get_separate_tables(self):
+        d = self.data()
+        d[0]["timeSeries"][0]["areas"].append({"code": "120020", "text": "北東部は問題なし", "properties": self.props(**{"大雨の警報級の可能性": ["", "", "中"]})})
+        text = self.fmt(d)
+        self.assertEqual(text.count("| 現象 | 9/24(木)12時〜"), 2)                        # 地域ごとに表を分ける
+        self.assertIn("気象台コメント（北東部）: 北東部は問題なし", text)
+
+    def test_bad_data(self):
+        for bad in (None, [], {}, "x"):
+            self.assertTrue(server.format_early_warning("千葉県", "120000", bad).startswith("エラー"))
+
+    def test_get_early_warning_reads_r8_url(self):
         seen = []
 
         def fake(url):
             seen.append(url)
-            return data
+            return self.data()
         with mock.patch.object(server, "fetch_json", side_effect=fake):
             text = run(server._get_early_warning("120000"))
         self.assertTrue(any("/probability/data/probability/r8/120000.json" in u for u in seen))
-        self.assertIn("大雨の警報級の可能性: 中 / —", text)
-        self.assertIn("土砂災害の警報級の可能性: — / 高", text)
-        self.assertIn("9/24(木)12時〜", text)
-        self.assertIn("明後日まで・6時間ごと", text)
-        self.assertIn("雨の警報級の可能性: 中", text)                    # 週間（従来の種別名）も表示
-        self.assertIn("発表: 9月24日(木) 11:00", text)
+        self.assertIn("■ 短期", text)
 
 
 class TyphoonTest(unittest.TestCase):
