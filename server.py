@@ -34,16 +34,23 @@ JST = timezone(timedelta(hours=9))
 # JMA API エンドポイント
 FORECAST_URL     = "https://www.jma.go.jp/bosai/forecast/data/forecast/{area_code}.json"
 OVERVIEW_URL     = "https://www.jma.go.jp/bosai/forecast/data/overview_forecast/{area_code}.json"
-WARNING_URL      = "https://www.jma.go.jp/bosai/warning/data/warning/{area_code}.json"
-PROBABILITY_URL  = "https://www.jma.go.jp/bosai/probability/data/probability/{area_code}.json"
+# ※ 2026-05-28 の防災気象情報の新体系（警戒レベル中心）への移行で、警報・早期注意情報・気象情報は
+#    data/r8/（令和8年版）に移転し、形式も変わった。旧パス（data/warning/ 等）は 5/28 のまま更新されない。
+#    r8 は将来変わりうる（r9 等）ため、404 のときは警報ページから現行の版を探索する（fetch_json_versioned）。
+WARNING_URL      = "https://www.jma.go.jp/bosai/warning/data/r8/{area_code}.json"
+WARNING_MAP_TIME_URL = "https://www.jma.go.jp/bosai/warning/data/r8/map_time.json"
+WARNING_TIMELINE_URL = "https://www.jma.go.jp/bosai/warning_timeline/data/{area_code}.json"
+PROBABILITY_URL  = "https://www.jma.go.jp/bosai/probability/data/probability/r8/{area_code}.json"
 MDRR_BASE_URL       = "https://www.data.jma.go.jp/stats/data/mdrr"
 MDRR_RANKING_URL    = MDRR_BASE_URL + "/rank_daily/data{mmdd}.html"
 MDRR_RECORD_UPD_URL = MDRR_BASE_URL + "/rank_update/d{mmdd}.html"
 FORECASTER_COMMENT_URL = "https://www.jma.go.jp/bosai/forecaster_comment/data/comments/{area_code}.txt"
-INFORMATION_LIST_URL   = "https://www.jma.go.jp/bosai/information/data/information.json"
-INFORMATION_DENBUN_URL = "https://www.jma.go.jp/bosai/information/data/denbun/{json_name}.json"
-TYPHOON_LIST_URL       = "https://www.jma.go.jp/bosai/information/data/typhoon.json"
-TYPHOON_DENBUN_URL     = "https://www.jma.go.jp/bosai/information/data/typhoon/{json_name}"
+INFORMATION_LIST_URL   = "https://www.jma.go.jp/bosai/information/data/r8/information.json"
+INFORMATION_DENBUN_URL = "https://www.jma.go.jp/bosai/information/data/r8/denbun/{json_name}.json"
+TYPHOON_TARGET_URL     = "https://www.jma.go.jp/bosai/typhoon/data/targetTc.json"
+TYPHOON_SPEC_URL       = "https://www.jma.go.jp/bosai/typhoon/data/{tc_id}/specifications.json"
+TYPHOON_FORECAST_URL   = "https://www.jma.go.jp/bosai/typhoon/data/{tc_id}/forecast.json"
+AREA_MASTER_URL        = "https://www.jma.go.jp/bosai/common/const/area.json"
 QUAKE_LIST_URL         = "https://www.jma.go.jp/bosai/quake/data/list.json"
 TSUNAMI_LIST_URL       = "https://www.jma.go.jp/bosai/tsunami/data/list.json"
 # 2週間気温予報・1ヶ月予報 確率予測CSVエンドポイント
@@ -102,24 +109,23 @@ MDRR_ELEMENTS = {
 # element="pre_all" 指定時にまとめて日最大値ランキングを取得する降水量要素の一覧
 PRECIP_ALL_ELEMENTS = ["pre1h", "pre3h", "pre6h", "pre12h", "pre24h", "pre48h", "pre72h"]
 
-# 警報・注意報コード → 名称マッピング（気象庁TELOPS準拠）
-# 出典: https://xml.kishou.go.jp/tec_material.html
-#   コード管理表一式 jmaxml_20260326_code.xlsx / WeatherWarning シート（令和8年3月26日更新）
-# ※ bosai JSON API の warnings[].code はこの TELOPS コードを使用している
+# 警報・注意報コード → 名称マッピング（気象庁TELOPS準拠。2026-05-28 の新体系のレベル付き名称）
+# 出典: https://xml.kishou.go.jp/tec_material.html（コード管理表）と、新体系の実データで確認
+# ※ bosai JSON の kinds[].code は "03" のような2桁文字列。warning_name() で int 正規化して引く
 WARNING_CODE_MAP = {
     # 解除
     "0": "解除",
     # 警報
     "2": "暴風雪警報",
-    "3": "大雨警報",           # 又はレベル３大雨警報
+    "3": "レベル３大雨警報",
     "4": "洪水警報",
     "5": "暴風警報",
     "6": "大雪警報",
     "7": "波浪警報",
-    "8": "高潮警報",           # 又はレベル３高潮警報
-    "9": "土砂災害警報",       # レベル３土砂災害警報（令和6年度追加）
+    "8": "レベル３高潮警報",
+    "9": "レベル３土砂災害警報",
     # 注意報
-    "10": "大雨注意報",        # 又はレベル２大雨注意報
+    "10": "レベル２大雨注意報",
     "12": "大雪注意報",
     "13": "風雪注意報",
     "14": "雷注意報",
@@ -127,7 +133,7 @@ WARNING_CODE_MAP = {
     "16": "波浪注意報",
     "17": "融雪注意報",
     "18": "洪水注意報",
-    "19": "高潮注意報",        # 又はレベル２高潮注意報
+    "19": "レベル２高潮注意報",
     "20": "濃霧注意報",
     "21": "乾燥注意報",
     "22": "なだれ注意報",
@@ -136,20 +142,38 @@ WARNING_CODE_MAP = {
     "25": "着氷注意報",
     "26": "着雪注意報",
     "27": "その他の注意報",
-    "29": "土砂災害注意報",    # レベル２土砂災害注意報（令和6年度追加）
+    "29": "レベル２土砂災害注意報",
     # 特別警報
     "32": "暴風雪特別警報",
-    "33": "大雨特別警報",      # 又はレベル５大雨特別警報
+    "33": "レベル５大雨特別警報",
     "35": "暴風特別警報",
     "36": "大雪特別警報",
     "37": "波浪特別警報",
-    "38": "高潮特別警報",      # 又はレベル５高潮特別警報
-    "39": "土砂災害特別警報",  # レベル５土砂災害特別警報（令和6年度追加）
-    # 危険警報（令和6年度追加）
-    "43": "大雨危険警報",      # レベル４大雨危険警報
-    "48": "高潮危険警報",      # レベル４高潮危険警報
-    "49": "土砂災害危険警報",  # レベル４土砂災害危険警報
+    "38": "レベル５高潮特別警報",
+    "39": "レベル５土砂災害特別警報",
+    # 危険警報（レベル４）
+    "43": "レベル４大雨危険警報",
+    "48": "レベル４高潮危険警報",
+    "49": "レベル４土砂災害危険警報",
 }
+
+# 新形式の警報データ（報のリスト）の各報の種別（dataTypeCode）。VPWW57・60 は実データの内容からの推定
+WARNING_DATATYPE_NAMES = {
+    "VPWW55": "大雨", "VPWW56": "土砂災害", "VPWW57": "高潮", "VPWW58": "暴風",
+    "VPWW59": "波浪", "VPWW60": "大雪等", "VPWW61": "その他の注意報",
+}
+WARNING_ACTIVE_STATUS = ("発表", "継続", "更新")
+# 警報システム全体の最終更新がこれより古ければ「更新停止の疑い」
+WARNING_SYSTEM_MAX_AGE_HOURS = 6
+
+
+def warning_name(code) -> str:
+    """警報コード（"03" のような2桁文字列でも "3" でも可）→ 名称"""
+    try:
+        key = str(int(str(code)))
+    except ValueError:
+        return f"不明({code})"
+    return WARNING_CODE_MAP.get(key, f"不明({code})")
 
 # 警報ステータスの優先度（表示順ソート用）
 WARNING_STATUS_ORDER = {"発表": 0, "継続": 1, "更新": 2, "解除": 3}
@@ -313,6 +337,69 @@ def fetch_json(url: str) -> dict:
     return response.json()
 
 
+# ---- 新体系（r8）への対応: 版の探索・地域マスター・時刻の整形 --------------------------------
+_JMA_VERSION = {"v": "r8"}
+_AREA_MASTER_CACHE = {"data": None, "at": 0.0}
+
+
+def _discover_jma_version():
+    """警報ページから現行のデータ版（r8 等）を探す。見つからなければ None。"""
+    try:
+        html = requests.get("https://www.jma.go.jp/bosai/warning/", headers=HEADERS, timeout=30).text
+    except requests.exceptions.RequestException:
+        return None
+    found = re.findall(r"data/(r\d+)/", html)
+    return max(set(found), key=found.count) if found else None
+
+
+def fetch_json_versioned(url: str):
+    """r8 を含む URL を取得する。404 のときは現行の版を探索し直して1回だけ再試行する（無音の移転への備え）。"""
+    try:
+        return fetch_json(url)
+    except requests.exceptions.HTTPError as e:
+        cur = _JMA_VERSION["v"]
+        if e.response is not None and e.response.status_code == 404 and f"/{cur}/" in url:
+            v = _discover_jma_version()
+            if v and v != cur:
+                data = fetch_json(url.replace(f"/{cur}/", f"/{v}/"))
+                _JMA_VERSION["v"] = v
+                return data
+        raise
+
+
+def get_area_master() -> dict:
+    """気象庁の地域マスター（area.json）。6時間キャッシュ。取得失敗時は古いキャッシュ、無ければ空。"""
+    import time as _time
+    if _AREA_MASTER_CACHE["data"] and _time.time() - _AREA_MASTER_CACHE["at"] < 6 * 3600:
+        return _AREA_MASTER_CACHE["data"]
+    try:
+        _AREA_MASTER_CACHE["data"] = fetch_json(AREA_MASTER_URL)
+        _AREA_MASTER_CACHE["at"] = _time.time()
+    except requests.exceptions.RequestException:
+        pass
+    return _AREA_MASTER_CACHE["data"] or {}
+
+
+def master_name(level: str, code: str) -> str:
+    """地域マスターから名称を引く（level: class10s / class20s / offices）。無ければコードをそのまま返す。"""
+    return (get_area_master().get(level, {}).get(code) or {}).get("name", code)
+
+
+def _fmt_dt(iso_str: str) -> str:
+    """ISO 日時 → 「9月24日(木) 10:41」"""
+    if not iso_str:
+        return ""
+    dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00")).astimezone(JST)
+    return f"{format_date_jp(dt.isoformat())} {dt.hour:02d}:{dt.minute:02d}"
+
+
+def _hours_ago(iso_str: str):
+    if not iso_str:
+        return None
+    dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+    return (datetime.now(timezone.utc) - dt).total_seconds() / 3600
+
+
 def format_date_jp(iso_str: str) -> str:
     """ISO 8601文字列を日本語日付に変換（例: 4月14日(月)）"""
     weekdays = ["月", "火", "水", "木", "金", "土", "日"]
@@ -387,7 +474,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="get_warning",
-            description="エリアコードを指定して警報・注意報の発表状況を取得する",
+            description="エリアコードを指定して警報・注意報の発表状況を取得する。2026-05-28 の新体系（警戒レベル付き: レベル2注意報〜レベル5特別警報）に対応し、市町村別の発表状況・特記事項を返す",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -411,6 +498,41 @@ async def list_tools() -> list[Tool]:
                     }
                 },
                 "required": ["area_code"],
+            },
+        ),
+        Tool(
+            name="get_warning_timeline",
+            description=(
+                "エリアコードを指定して時系列情報（警報等の見通し）を取得する。"
+                "警報・注意報に先立つ、3時間ごとの明日までの見通し（大雨・土砂災害・高潮・風・雷など）を市町村単位で確認できる。"
+                "5時・11時・17時・23時に発表され随時更新される予測情報。注意（レベル2）以上の見通しがある市町村だけを表示する"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "area_code": {
+                        "anyOf": [{"type": "string"}, {"type": "integer"}],
+                        "description": "気象庁エリアコード（府県予報区。例: 120000 = 千葉県）",
+                    },
+                    "municipality": {
+                        "type": "string",
+                        "description": "市町村名で絞り込む（任意。例: '佐倉'）",
+                    },
+                },
+                "required": ["area_code"],
+            },
+        ),
+        Tool(
+            name="get_typhoon",
+            description="発生中の台風の実況（位置・気圧・風速・強風域・暴風域）と進路予報（予報円・暴風警戒域）を取得する。台風番号（例: 26）を指定すると絞り込める",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "typhoon_number": {
+                        "type": "string",
+                        "description": "台風番号（例: '26' または '2626'）。省略すると発生中のすべての台風",
+                    }
+                },
             },
         ),
         Tool(
@@ -759,6 +881,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         result = await _get_warning(area_code)
     elif name == "get_early_warning":
         result = await _get_early_warning(area_code)
+    elif name == "get_warning_timeline":
+        result = await _get_warning_timeline(area_code, str(arguments.get("municipality", "")))
+    elif name == "get_typhoon":
+        result = await _get_typhoon(str(arguments.get("typhoon_number", "")))
     elif name == "get_mdrr_data":
         result = await _get_mdrr_data(
             arguments["element"],
@@ -1038,77 +1164,305 @@ async def _get_overview(area_code: str) -> str:
 
 
 async def _get_warning(area_code: str) -> str:
-    """警報・注意報の発表状況を取得して整形する"""
+    """警報・注意報の発表状況を取得して整形する（2026-05-28 の新体系: 警戒レベル付き・報のリスト形式）"""
     area_name = AREA_CODE_MAP.get(area_code, area_code)
-    url = WARNING_URL.format(area_code=area_code)
-
     try:
-        data = fetch_json(url)
+        reports = fetch_json_versioned(WARNING_URL.format(area_code=area_code))
     except requests.exceptions.RequestException as e:
         return f"エラー: 警報データの取得に失敗しました。\n詳細: {e}"
+    return format_warning(area_name, area_code, reports, _system_updated())
 
-    report_datetime = data.get("reportDatetime", "")
-    publishing_office = data.get("publishingOffice", "")
-    headline = data.get("headlineText", "")
 
-    lines = [f"【{area_name} 警報・注意報】", ""]
-    if report_datetime:
-        lines.append(f"発表: {format_date_jp(report_datetime)}")
-    if publishing_office:
-        lines.append(f"発表機関: {publishing_office}")
-    if headline:
-        lines.append(f"見出し: {headline}")
-    lines.append("")
+def _system_updated():
+    """警報システム全体の最終更新（ISO/UTC）。取得できなければ None。"""
+    try:
+        return fetch_json_versioned(WARNING_MAP_TIME_URL).get("latestControlDatetime")
+    except (requests.exceptions.RequestException, AttributeError, ValueError):
+        return None
 
-    # areaTypes[0]: 地域区分（class10）レベルで集計
-    area_types = data.get("areaTypes", [])
-    if not area_types:
-        lines.append("警報・注意報データがありません。")
-        return "\n".join(lines)
 
-    # 発表中・解除以外を先に、解除を後にまとめる
-    active_entries = []
-    cleared_entries = []
+def parse_warning_reports(reports):
+    """新形式（報のリスト）から、種別ごとの最新の報を取り出す。
 
-    for area_info in area_types[0].get("areas", []):
-        code = area_info.get("code", "")
-        name_str = WARNING_AREA_NAME_MAP.get(code, code)
-        warnings = area_info.get("warnings", [])
+    戻り値: 種別コード(dataTypeCode) → 最新の報。継続中の警報は古い報のまま残る（種別ごとに最新の報だけが現状）。
+    """
+    latest = {}
+    for rep in reports if isinstance(reports, list) else []:
+        code, t = rep.get("dataTypeCode"), rep.get("reportDatetime", "")
+        if code and (code not in latest or t > latest[code].get("reportDatetime", "")):
+            latest[code] = rep
+    return latest
 
-        active_warnings = []
-        cleared_warnings = []
 
-        for w in warnings:
-            w_code = str(w.get("code", ""))
-            status = w.get("status", "")
-            w_name = WARNING_CODE_MAP.get(w_code, f"不明({w_code})")
-            if status == "解除":
-                cleared_warnings.append(f"{w_name}（{status}）")
-            elif status:
-                active_warnings.append(f"{w_name}（{status}）")
+def _kinds_text(kinds, active: bool) -> list:
+    out = []
+    for k in kinds or []:
+        status, code = k.get("status", ""), k.get("code")
+        if code in (None, ""):
+            continue
+        if (status in WARNING_ACTIVE_STATUS) == active and (active or status == "解除"):
+            out.append(f"{warning_name(code)}（{status}）")
+    return out
 
-        if active_warnings:
-            active_entries.append((name_str, active_warnings))
-        if cleared_warnings:
-            cleared_entries.append((name_str, cleared_warnings))
 
-    if active_entries:
-        lines.append("■ 発表中")
-        for name_str, ws in active_entries:
-            lines.append(f"  {name_str}: {' / '.join(ws)}")
+def format_warning(area_name, area_code, reports, system_updated=None) -> str:
+    latest = parse_warning_reports(reports)
+    if not latest:
+        return ("エラー: 警報データが想定した形式ではありません（旧形式、または空）。\n"
+                "2026-05-28 の新体系への移行で、警報データは data/r8/ の報のリスト形式になりました。")
+    lines = [f"【{area_name} 警報・注意報】（2026-05-28 の新体系: 警戒レベル付き）", ""]
+
+    if system_updated:
+        h = _hours_ago(system_updated)
+        stale = h is not None and h > WARNING_SYSTEM_MAX_AGE_HOURS
+        lines.append(f"警報システムの最終更新: {_fmt_dt(system_updated)}（{h:.1f}時間前）"
+                     + ("  ⚠ 更新が止まっている疑いがあります。公式サイトで確認してください" if stale else ""))
         lines.append("")
 
-    if cleared_entries:
-        lines.append("■ 解除")
-        for name_str, ws in cleared_entries:
-            lines.append(f"  {name_str}: {' / '.join(ws)}")
-        lines.append("")
+    # 発表中・解除を集計（一次細分区域 class10 と 市町村 class20）
+    active10, active20, cleared20 = {}, {}, {}
+    for rep in latest.values():
+        w = rep.get("warning") or {}
+        for it in w.get("class10Items") or []:
+            act = _kinds_text(it.get("kinds"), True)
+            if act:
+                active10.setdefault(it["areaCode"], []).extend(act)
+        for it in w.get("class20Items") or []:
+            act, clr = _kinds_text(it.get("kinds"), True), _kinds_text(it.get("kinds"), False)
+            if act:
+                active20.setdefault(it["areaCode"], []).extend(act)
+            if clr:
+                cleared20.setdefault(it["areaCode"], []).extend(clr)
 
-    if not active_entries and not cleared_entries:
+    def label10(code):
+        return WARNING_AREA_NAME_MAP.get(code) or master_name("class10s", code)
+
+    if active10:
+        lines.append("■ 発表中（一次細分区域）")
+        for code, ws in sorted(active10.items()):
+            lines.append(f"  {label10(code)}: {' / '.join(ws)}")
+        lines.append("")
+    if active20:
+        lines.append("■ 発表中（市町村）")
+        for code, ws in sorted(active20.items()):
+            lines.append(f"  {master_name('class20s', code)}: {' / '.join(ws)}")
+        lines.append("")
+    if not active10 and not active20:
         lines.append("現在、発表中の警報・注意報はありません。")
+        lines.append("")
 
+    lines.append("■ 各種別の最新の報")
+    for code, rep in sorted(latest.items()):
+        kind = WARNING_DATATYPE_NAMES.get(code, code)
+        head = (rep.get("headlineText") or "").strip()
+        lines.append(f"  ・{kind}（{_fmt_dt(rep.get('reportDatetime', ''))}発表）: {head}")
     lines.append("")
+
+    notices = []
+    for rep in latest.values():
+        n = (rep.get("notice") or "").strip()
+        if n and n not in notices:
+            notices.append(n)
+    if notices:
+        lines.append("■ 特記事項")
+        lines.extend(f"  {n}" for n in notices)
+        lines.append("")
+
+    if cleared20:
+        # 解除された警報・注意報を、名称ごとに市町村をまとめて表示する（濃霧注意報の解除が大量に並ぶのを避ける）
+        by_name = {}
+        for code, ws in cleared20.items():
+            for w in ws:
+                by_name.setdefault(w.replace("（解除）", ""), []).append(master_name("class20s", code))
+        lines.append("■ 解除（各種別の最新の報に含まれるもの）")
+        for w, names in sorted(by_name.items(), key=lambda x: -len(x[1])):
+            shown = "・".join(names[:5]) + (f" ほか{len(names) - 5}市町村" if len(names) > 5 else "")
+            lines.append(f"  {w}: {shown}")
+        lines.append("")
+
     lines.append(f"出典: 気象庁 https://www.jma.go.jp/bosai/map.html#contents=warning&areaCode={area_code}")
+    return "\n".join(lines).rstrip()
+
+
+TIMELINE_LEVEL_MARK = {2: "注", 3: "警", 4: "危", 5: "切"}
+
+
+def _disp_width(s: str) -> int:
+    """表示幅（全角=2, 半角=1）。表の桁そろえに使う。"""
+    import unicodedata
+    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in s)
+
+
+async def _get_warning_timeline(area_code: str, municipality: str = "") -> str:
+    """時系列情報（3時間ごとの警報等の見通し）を取得して整形する"""
+    area_name = AREA_CODE_MAP.get(area_code, area_code)
+    try:
+        data = fetch_json(WARNING_TIMELINE_URL.format(area_code=area_code))
+    except requests.exceptions.RequestException as e:
+        return f"エラー: 時系列情報の取得に失敗しました。\n詳細: {e}"
+    return format_warning_timeline(area_name, area_code, data, municipality)
+
+
+def format_warning_timeline(area_name, area_code, data, municipality="") -> str:
+    try:
+        series = data["timeSeries"]
+    except (KeyError, TypeError):
+        return "エラー: 時系列情報が想定した形式ではありません。"
+    ts = next((s for s in series if s.get("timeDefines") and s["timeDefines"][0].get("duration") == "PT3H"), None)
+    if ts is None:
+        return "エラー: 3時間ごとの時系列データが見つかりません。"
+    blocks = [datetime.fromisoformat(t["dateTime"]).astimezone(JST) for t in ts["timeDefines"]]
+    lines = [f"【{area_name} 時系列情報（警報等の見通し・3時間ごと）】", "",
+             f"発表: {_fmt_dt(data.get('reportDatetime', ''))}（5時・11時・17時・23時に発表、必要に応じて随時更新）",
+             "※ 警報・注意報に先立つ予測情報です。実際の警報・注意報の発表状況と整合しない場合があります。", ""]
+
+    rows = []   # (市町村名, 危険度の種類, [レベル...])
+    for it in ts.get("class20Items") or []:
+        name = master_name("class20s", it["areaCode"])
+        if municipality and municipality not in name:
+            continue
+        best = {}
+        for k in it.get("kinds") or []:
+            for part in k.get("significancyParts") or []:
+                label = (part.get("type") or "").replace("危険度", "")
+                for loc in part.get("locals") or []:
+                    lv = []
+                    for c in loc.get("codes") or []:
+                        try:
+                            lv.append(int(c) // 10)      # コードの十の位 = 危険度レベル（1=なし 2=注意 3=警戒 4=危険 5=災害切迫）
+                        except ValueError:
+                            lv.append(0)
+                    old = best.get(label, [0] * len(lv))
+                    best[label] = [max(a, b) for a, b in zip(old, lv)] if old else lv
+        for label, lv in best.items():
+            if any(x >= 2 for x in lv):
+                rows.append((name, label, lv))
+
+    if not rows:
+        target = f"（{municipality}）" if municipality else ""
+        lines.append(f"現在、{target}注意以上の見通し（大雨・土砂災害・高潮・風・雷など）は示されていません。")
+    else:
+        hdr = " ".join(f"{b.hour:>2}" for b in blocks)          # 各列は表示幅2（全角1文字と同じ）
+        day_marks = []
+        for i, b in enumerate(blocks):
+            if i == 0 or b.day != blocks[i - 1].day:
+                day_marks.append(f"{b.month}/{b.day}({['月','火','水','木','金','土','日'][b.weekday()]})から")
+        lines.append("凡例: 注=注意(レベル2) 警=警戒(レベル3) 危=危険(レベル4) 切=災害切迫(レベル5) ・=なし　" + "／".join(day_marks))
+        labels = [f"{name}・{label}" for name, label, _ in sorted(rows, key=lambda r: (r[0], r[1]))]
+        width = max(_disp_width(x) for x in labels + ["時刻(JST)"])
+        lines.append("時刻(JST)".ljust(width - _disp_width("時刻(JST)") + len("時刻(JST)")) + "  " + hdr)
+        for lab, (name, label, lv) in zip(labels, sorted(rows, key=lambda r: (r[0], r[1]))):
+            cells = " ".join(TIMELINE_LEVEL_MARK.get(x, "・") for x in lv)
+            lines.append(lab + " " * (width - _disp_width(lab)) + "  " + cells)
+        lines.append(f"（対象: 注意以上の見通しがある市町村×種類 {len(rows)}行）")
+    lines.append("")
+    lines.append("出典: 気象庁 https://www.jma.go.jp/bosai/warning_timeline/")
+    return "\n".join(lines).rstrip()
+
+
+TYPHOON_DIR_NAME = {"北": "北側", "南": "南側", "東": "東側", "西": "西側", "北東": "北東側", "北西": "北西側",
+                    "南東": "南東側", "南西": "南西側", "全域": "全域"}
+
+
+def _tp_wind(w):
+    s = ((w or {}).get("sustained") or {}).get("m/s")
+    g = ((w or {}).get("gust") or {}).get("m/s")
+    return f"最大風速{s}m/s（最大瞬間風速{g}m/s）" if s else ""
+
+
+def _tp_kind(p) -> str:
+    """予報時点の種別・強度。台風のときは強度（強い・非常に強い等）だけ、それ以外（熱帯低気圧等）は種別も表示する。"""
+    cat = (p.get("category") or {}).get("jp", "")
+    inten = p.get("intensity")
+    parts = [x for x in ((cat if cat and cat != "台風" else ""), (inten if inten and inten != "-" else "")) if x]
+    return f"（{'・'.join(parts)}）" if parts else ""
+
+
+def _tp_pos(p):
+    deg = (p or {}).get("deg") or []
+    return f"北緯{deg[0]}度 東経{deg[1]}度" if len(deg) == 2 else "位置不明"
+
+
+def _tp_area_ranges(items, key_area="area"):
+    out = []
+    for a in items or []:
+        area = a.get(key_area)
+        area = area.get("jp") if isinstance(area, dict) else area
+        km = (a.get("range") or {}).get("km")
+        if km is not None:
+            out.append(f"{TYPHOON_DIR_NAME.get(area, area)}{km}km")
+    return "・".join(out)
+
+
+def format_typhoon(tc_id, spec, fc) -> str:
+    """台風1個分の諸元（実況・予報）を整形する。"""
+    title = next((p for p in spec if p.get("part") == "title"), {})
+    num = str(title.get("typhoonNumber", ""))[-2:].lstrip("0")
+    name = (title.get("name") or {})
+    head = f"台風{num}号" if num else "熱帯低気圧"
+    if name.get("jp"):
+        head += f"（{name['jp']} {name.get('en', '')}）"
+    lines = [f"■ {head}　発表: {_fmt_dt((title.get('issue') or {}).get('UTC', ''))}"]
+
+    parts = [p for p in spec if isinstance(p.get("part"), dict)]
+    analysis = next((p for p in parts if p.get("advancedHours") == 0), None)
+    if analysis:
+        cat = (analysis.get("category") or {}).get("jp", "")
+        size = "・".join(x for x in (analysis.get("scale"), analysis.get("intensity")) if x and x != "-")
+        lines.append(f"  実況（{_fmt_dt((analysis.get('validtime') or {}).get('UTC', ''))}）: {cat}{'（' + size + '）' if size else ''}")
+        lines.append(f"    {_tp_pos(analysis.get('position'))}（{analysis.get('location', '')}）"
+                     f" {analysis.get('course', '')}へ時速{(analysis.get('speed') or {}).get('km/h', '?')}km")
+        lines.append(f"    中心気圧{analysis.get('pressure', '?')}hPa　{_tp_wind(analysis.get('maximumWind'))}")
+        gale = _tp_area_ranges(analysis.get("galeWarning"))
+        storm = _tp_area_ranges(analysis.get("stormWarning"))
+        if gale:
+            lines.append(f"    強風域（風速15m/s以上）: {gale}")
+        if storm:
+            lines.append(f"    暴風域（風速25m/s以上）: {storm}")
+
+    fc_times = {p.get("advancedHours"): (p.get("validtime") or {}).get("UTC", "") for p in fc if isinstance(p.get("part"), dict)}
+    forecasts = [p for p in parts if (p.get("advancedHours") or 0) > 0]
+    if forecasts:
+        lines.append("  予報:")
+        for p in forecasts:
+            h = p["advancedHours"]
+            radius = (p.get("probabilityCircleRadius") or {}).get("km")
+            storm = _tp_area_ranges(p.get("stormWarning"))
+            lines.append(f"    {h}時間後（{_fmt_dt(fc_times.get(h, ''))}）: {_tp_pos(p.get('position'))}"
+                         f" 気圧{p.get('pressure', '?')}hPa {_tp_wind(p.get('maximumWind'))}"
+                         + (f" 予報円の半径{radius}km" if radius else "") + (f" 暴風警戒域{storm}" if storm else "")
+                         + _tp_kind(p))
+    return "\n".join(lines)
+
+
+async def _get_typhoon(typhoon_number: str = "") -> str:
+    """発生中の台風の実況・進路予報を取得して整形する（新: typhoon/data/。旧 information/data/typhoon.json は 5/27 で停止）"""
+    try:
+        targets = fetch_json(TYPHOON_TARGET_URL)
+    except requests.exceptions.RequestException as e:
+        return f"エラー: 台風情報の取得に失敗しました。\n詳細: {e}"
+    want = str(typhoon_number).strip().lstrip("0")
+    want = want[-2:].lstrip("0") if len(want) > 2 else want      # 2626 → 26
+    lines = ["【台風情報】", ""]
+    shown = 0
+    for t in targets if isinstance(targets, list) else []:
+        num = str(t.get("typhoonNumber", ""))[-2:].lstrip("0")
+        if want and num != want:
+            continue
+        tc_id = t.get("tropicalCyclone", "")
+        try:
+            spec = fetch_json(TYPHOON_SPEC_URL.format(tc_id=tc_id))
+            fc = fetch_json(TYPHOON_FORECAST_URL.format(tc_id=tc_id))
+        except requests.exceptions.RequestException as e:
+            lines.append(f"■ 台風{num}号: 詳細の取得に失敗しました（{e}）")
+            continue
+        lines.append(format_typhoon(tc_id, spec, fc))
+        lines.append("")
+        shown += 1
+    if shown == 0 and len(lines) <= 2:
+        lines.append("現在、発表中の台風情報はありません。" if not want else f"台風{want}号の情報は見つかりませんでした。")
+        lines.append("")
+    lines.append("出典: 気象庁 https://www.jma.go.jp/bosai/information/typhoon.html#")
     return "\n".join(lines).rstrip()
 
 
@@ -1136,6 +1490,8 @@ async def _get_early_warning(area_code: str) -> str:
     # 警報級の可能性を持つプロパティのみ抽出するヘルパー
     EARLY_TYPES = {
         "雨の警報級の可能性",
+        "大雨の警報級の可能性",
+        "土砂災害の警報級の可能性",
         "雪の警報級の可能性",
         "風（風雪）の警報級の可能性",
         "波の警報級の可能性",
@@ -1149,7 +1505,7 @@ async def _get_early_warning(area_code: str) -> str:
     report_datetime = first.get("reportDatetime", "")
     publishing_office = first.get("publishingOffice", "")
     if report_datetime:
-        lines.append(f"発表: {format_date_jp(report_datetime)}")
+        lines.append(f"発表: {_fmt_dt(report_datetime)}")
     if publishing_office:
         lines.append(f"発表機関: {publishing_office}")
     lines.append("")
@@ -1167,15 +1523,13 @@ async def _get_early_warning(area_code: str) -> str:
 
     if short_early_ts:
         time_defines = short_early_ts.get("timeDefines", [])
-        # 時刻ラベルを作成（例: 15日夜、16日昼）
+        # 時刻ラベルを作成（新体系: 6時間ごと。例: 24日(木)12時〜）
         time_labels = []
         for td in time_defines:
             dt = datetime.fromisoformat(td).astimezone(JST)
-            hour = dt.hour
-            period = "夜" if hour >= 18 or hour < 6 else "昼前後"
-            time_labels.append(f"{dt.month}/{dt.day}({['月','火','水','木','金','土','日'][dt.weekday()]}){period}")
+            time_labels.append(f"{dt.month}/{dt.day}({['月','火','水','木','金','土','日'][dt.weekday()]}){dt.hour}時〜")
 
-        lines.append("■ 短期（今日夜～明日）")
+        lines.append("■ 短期（明後日まで・6時間ごと）")
         header = "  地域" + "".join(f"  {lbl}" for lbl in time_labels)
         lines.append(header)
 
@@ -1642,23 +1996,16 @@ async def _get_forecaster_comment(area_code: str) -> str:
 
 
 async def _get_information(area_code: str = "", info_type: str = "") -> str:
-    """気象情報（府県気象情報・地方気象情報・全般気象情報等）を取得して整形する"""
+    """気象情報（府県気象情報・地方気象情報・全般気象情報等）を取得して整形する（新体系: information/data/r8/）"""
     try:
-        items = fetch_json(INFORMATION_LIST_URL)
+        items = fetch_json_versioned(INFORMATION_LIST_URL)
     except requests.exceptions.RequestException as e:
         return f"エラー: 気象情報一覧の取得に失敗しました。\n詳細: {e}"
 
     if not items:
         return "エラー: 気象情報データが空です。"
 
-    # 台風全般情報は typhoon.json から別途取得してマージ
-    try:
-        typhoon_items = fetch_json(TYPHOON_LIST_URL)
-        for item in typhoon_items:
-            item["_typhoon"] = True  # 本文取得エンドポイント区別用
-        items = items + typhoon_items
-    except requests.exceptions.RequestException:
-        pass  # 台風情報取得失敗は無視して続行
+    # 台風の実況・進路予報は get_typhoon で取得する（旧 typhoon.json は 2026-05-27 で停止し、新体系では別の配信先）
 
     # エリアコードフィルタ: areaCode（都道府県レベル）で前方一致
     # 例: area_code="471000" → areaCode="471000" に一致
@@ -1698,41 +2045,34 @@ async def _get_information(area_code: str = "", info_type: str = "") -> str:
     lines = [f"【{area_label} 気象情報】", f"該当件数: {len(filtered)}件", ""]
 
     for i, item in enumerate(filtered):
-        control_title   = item.get("controlTitle", "")
+        control_title   = item.get("controlTitle", "") or "（PDF資料）"
         head_title      = item.get("headTitle", "")
         publishing      = item.get("publishingOffice", "")
         report_dt       = item.get("reportDatetime", "")
         info_type_label = item.get("infoType", "")
-        # typhoon.json 由来は fileName フィールド、それ以外は jsonName フィールド
-        is_typhoon = item.get("_typhoon", False)
-        if is_typhoon:
-            json_name = item.get("fileName", "")
-        else:
-            json_name = item.get("jsonName", "")
+        json_name       = item.get("jsonName", "") if item.get("dataType") != "pdf" else ""
 
         date_str = format_date_jp(report_dt) if report_dt else ""
 
         lines.append(f"■ {control_title}（{publishing}）")
         lines.append(f"  発表: {date_str}　{info_type_label}")
-        lines.append(f"  見出し: {head_title}")
+        if head_title:
+            lines.append(f"  見出し: {head_title}")
 
         # 本文取得（上位 MAX_FULL_TEXT 件のみ）
         if i < MAX_FULL_TEXT and json_name:
-            if is_typhoon:
-                denbun_url = TYPHOON_DENBUN_URL.format(json_name=json_name)
-            else:
-                denbun_url = INFORMATION_DENBUN_URL.format(json_name=json_name)
             try:
-                denbun = fetch_json(denbun_url)
-                headline = denbun.get("headlineText", "").strip()
-                comment  = denbun.get("commentText", "").strip()
+                denbun = fetch_json_versioned(INFORMATION_DENBUN_URL.format(json_name=json_name))
+                headline = (denbun.get("headlineText") or "").strip()
+                # 新体系の本文は <br> を含む
+                comment  = re.sub(r"<br\s*/?>", "\n", (denbun.get("commentText") or "")).strip()
                 if headline:
                     lines.append(f"  概要: {headline}")
                 if comment:
                     # 長い本文は改行を保持しつつ先頭に空白を付けて整形
                     for cline in comment.splitlines():
                         lines.append(f"    {cline}" if cline.strip() else "")
-            except requests.exceptions.RequestException:
+            except (requests.exceptions.RequestException, ValueError):
                 pass  # 本文取得失敗は無視して続行
 
         lines.append("")

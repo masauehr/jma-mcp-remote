@@ -39,7 +39,11 @@ jma_mcp_remote/
 | 起動方法 | Claude Code がサブプロセス起動 | Render 上で常駐 |
 | 対応クライアント | Claude Code（CLI） | Claude.ai Web・デスクトップアプリ |
 | コスト | 無料（ローカル実行） | Render 無料プラン（スリープあり） |
-| ツール内容 | 全19種 | 同一（server.py を共有） |
+| ツール内容 | 全23種 | 同一（server.py を共有） |
+
+## 2026-05-28 の新体系（防災気象情報）への対応（2026-09-24）
+
+警報・早期注意情報・気象情報・台風情報の配信先が `data/r8/` に移転し形式も変わったため、ローカル版と同じ改修を適用した（旧パスは 5/28 のまま凍結）。新ツール `get_warning_timeline`（時系列情報）・`get_typhoon`（台風の実況・予報）を追加。詳細は [jma-mcp.md](jma-mcp.md)。テストは `tests/`（`/opt/homebrew/bin/python3 -m unittest discover -s tests`）。**Render への反映は GitHub への push 後（自動デプロイの設定次第）。**
 
 ## Claude.ai への接続
 

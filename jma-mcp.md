@@ -133,12 +133,15 @@ Claude Code（結果を受け取り、回答に組み込む）
 |---|---|
 | `/bosai/forecast/data/forecast/{code}.json` | 3日間予報・週間予報 |
 | `/bosai/forecast/data/overview_forecast/{code}.json` | 天気概況テキスト |
-| `/bosai/warning/data/warning/{code}.json` | 警報・注意報発表状況 |
-| `/bosai/probability/data/probability/{code}.json` | 早期注意情報（警報級の可能性） |
+| `/bosai/warning/data/r8/{code}.json` | 警報・注意報発表状況（新体系。旧 `warning/data/warning/` は凍結） |
+| `/bosai/warning/data/r8/map_time.json` | 警報システム全体の最終更新（稼働判定） |
+| `/bosai/warning_timeline/data/{code}.json` | 時系列情報（3時間ごとの警報等の見通し） |
+| `/bosai/probability/data/probability/r8/{code}.json` | 早期注意情報（警報級の可能性。新体系） |
 | `/bosai/forecaster_comment/data/comments/{code}.txt` | 気象台からのコメント（HTML。<<特記事項>>含む） |
-| `/bosai/information/data/information.json` | 気象情報一覧（府県・地方・全般気象情報） |
-| `/bosai/information/data/denbun/{json_name}.json` | 気象情報本文（見出し＋解説文） |
-| `/bosai/information/data/typhoon.json` | 台風全般情報一覧（`get_information` で統合取得） |
+| `/bosai/information/data/r8/information.json` | 気象情報一覧（府県・地方・全般気象情報。約1か月分） |
+| `/bosai/information/data/r8/denbun/{json_name}.json` | 気象情報本文（見出し＋解説文） |
+| `/bosai/typhoon/data/targetTc.json` | 発生中の台風の一覧（`get_typhoon`） |
+| `/bosai/typhoon/data/{TC番号}/specifications.json` ・ `forecast.json` | 台風の諸元（実況・予報）・予報円（`get_typhoon`） |
 | `data.jma.go.jp /stats/data/mdrr/{category}/alltable/{elem}_rct.csv` | 最新観測値（降水量・気温・風速・積雪 等） |
 | `data.jma.go.jp /stats/data/mdrr/rank_daily/data{MMDD}.html` | 全国観測値ランキング（上位10地点） |
 | `data.jma.go.jp /stats/data/mdrr/rank_update/d{MMDD}.html` | 観測史上1位の値 更新状況 |
@@ -152,6 +155,26 @@ Claude Code（結果を受け取り、回答に組み込む）
 | `/bosai/tidelevel/data/tide/tide_obs_{YYYYMMDD}_{code}.json` | 潮位観測データ（15秒間隔・最大5760点/日） |
 | `/bosai/tidelevel/const/tide_astro/tide_astro_{YYYY}_{code}.json` | 天文潮位（1時間間隔・年間データ） |
 | `/bosai/tidelevel/const/tide_area.json` | 全国潮位観測所一覧（全国39地区166局） |
+
+### 2026-05-28 の新体系（防災気象情報）への対応 ※2026-09-24 実施
+
+2026-05-28 の防災気象情報の新体系（警戒レベル中心）への移行で、**警報・早期注意情報・気象情報・台風情報の JSON の配信先と形式が変わった**。
+旧ファイルは削除されず **5/28（台風は 5/27）のまま更新されない**ため、旧パスのままだと「警報なし」など**古い内容が返り続ける**（エラーにならないので気づきにくい）。
+`r8` は「令和8年版」の意味で、将来（r9 等）変わりうる。`server.py` は 404 のとき警報ページから現行の版を探して自動で追従する（`fetch_json_versioned`）。
+
+| データ | 旧（〜5/28。凍結） | 新（現行） | 主な変更点 |
+|---|---|---|---|
+| 警報・注意報 | `warning/data/warning/{code}.json` | `warning/data/r8/{code}.json` | 辞書 → **報のリスト**（種別ごと: VPWW55=大雨, 56=土砂災害, 57=高潮, 58=暴風, 59=波浪, 61=その他）。`warning.class10Items / class20Items[].kinds[]`（`code`・`status`）。コードは "03" のような2桁文字列。種別ごとに最新の報だけが現状で、継続中の警報は古い報のまま残る |
+| 警報システムの全体更新 | — | `warning/data/r8/map_time.json` | `latestControlDatetime`（動作中かの判定に使う。6時間以上古ければ更新停止の疑い） |
+| 時系列情報（**新規**） | — | `warning_timeline/data/{code}.json`（**版の番号なし**） | 3時間ごとの明日までの見通し（市町村単位）。5・11・17・23時発表＋随時更新の**予測情報**。`significancyParts[].locals[].codes` の**十の位が危険度レベル**（1=なし 2=注意 3=警戒 4=危険 5=災害切迫） |
+| 早期注意情報 | `probability/data/probability/{code}.json` | `probability/data/probability/r8/{code}.json` | 短期が**6時間ごと（明後日まで）**に。「雨」が**「大雨」と「土砂災害」に分離**。各地域に解説文 `text`。`timeDefineArray` を追加 |
+| 気象情報一覧 | `information/data/information.json` | `information/data/r8/information.json` | 約1か月分（約270件）。PDF資料の項目（`controlTitle` なし）を含む |
+| 気象情報本文 | `information/data/denbun/{json_name}.json` | `information/data/r8/denbun/{json_name}.json` | 本文に `<br>` を含む |
+| 台風情報 | `information/data/typhoon.json`（一覧）＋ `typhoon/{fileName}` | `typhoon/data/targetTc.json`（発生中の台風）・`typhoon/data/{TC番号}/specifications.json`（諸元・実況・予報）・`forecast.json`（予報円） | 新ツール `get_typhoon`。`get_information` への台風の統合は廃止 |
+
+**変更されていなかったもの**（2026-09-24 に全数で鮮度を確認）: 予報 `forecast/data/forecast/`・概況 `overview_forecast/`・予報官コメント `forecaster_comment/`・地震 `quake/data/list.json`・津波 `tsunami/data/list.json`（空 = 発表なし）・潮位 `tidelevel/`・地域コード `common/const/area.json`・`data.jma.go.jp` 系（観測値・長期予報）。
+
+**警報コード（新体系のレベル付き名称）**: 大雨 `10`=レベル2注意報・`3`=レベル3警報・`43`=レベル4危険警報・`33`=レベル5特別警報／土砂災害 `29`・`9`・`49`・`39`／高潮 `19`・`8`・`48`・`38`。洪水 `18`（注意報）・`4`（警報）などは従来どおり。コードは int に正規化して照合する（`warning_name()`）。
 
 ### コード表・仕様の参照先
 
@@ -195,7 +218,7 @@ Claude Code（結果を受け取り、回答に組み込む）
 
 ---
 
-## 利用可能なツール（全21種）
+## 利用可能なツール（全23種）
 
 ### 予報・警報系（エリアコード指定）
 
@@ -205,10 +228,12 @@ Claude Code（結果を受け取り、回答に組み込む）
 | `get_forecast` | 3日間の短期天気予報を取得 | `area_code` |
 | `get_weekly_forecast` | 週間天気予報を取得 | `area_code` |
 | `get_overview` | 天気概況テキストを取得 | `area_code` |
-| `get_warning` | 警報・注意報の発表状況を取得 | `area_code` |
-| `get_early_warning` | 早期注意情報（警報級の可能性）と気象台コメントを取得 | `area_code` |
+| `get_warning` | 警報・注意報の発表状況を取得（**2026-05-28 の新体系**: レベル2注意報〜レベル5特別警報、市町村別、各種別の最新の報、特記事項） | `area_code` |
+| `get_warning_timeline` | **時系列情報（警報等の見通し）**を取得。3時間ごとの明日までの見通し（大雨・土砂災害・高潮・風・雷 等）を市町村別に表示。注意以上の見通しがある市町村だけを表示する予測情報 | `area_code`, `municipality`（省略可） |
+| `get_early_warning` | 早期注意情報（警報級の可能性）と気象台コメントを取得（短期は6時間ごと・明後日まで、大雨と土砂災害を分離） | `area_code` |
 | `get_forecaster_comment` | 気象台からのコメント（警報等の見込み・特記事項）を取得。台風からのうねりなど「<<特記事項>>」セクションもここに含まれる | `area_code` |
-| `get_information` | 気象情報（府県・地方・全般）の見出し＋本文を取得。大雨・暴風・高波・台風などの詳細解説文を確認できる。**台風全般情報（typhoon.json）も統合済み** | `area_code`（省略可）, `info_type`（省略可） |
+| `get_information` | 気象情報（府県・地方・全般）の見出し＋本文を取得。大雨・暴風・高波・台風などの詳細解説文を確認できる。台風の実況・進路予報は `get_typhoon` で取得（旧 typhoon.json の統合は廃止） | `area_code`（省略可）, `info_type`（省略可） |
+| `get_typhoon` | **発生中の台風の実況**（位置・気圧・風速・強風域・暴風域）と**進路予報**（予報円・暴風警戒域）を取得 | `typhoon_number`（省略可。例: 26） |
 | `get_earthquake_info` | 最近の地震情報を取得（震央地名・M・最大震度・発生日時） | `min_intensity`（震度フィルタ）, `count`（件数） |
 | `get_tsunami_info` | 発表中の津波警報・注意報・予報を取得。発表なしの場合はその旨を返す | なし |
 
