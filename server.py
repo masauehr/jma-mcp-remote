@@ -505,7 +505,8 @@ async def list_tools() -> list[Tool]:
             description=(
                 "エリアコードを指定して時系列情報（警報等の見通し）を取得する。"
                 "警報・注意報に先立つ、3時間ごとの明日までの見通し（大雨・土砂災害・高潮・風・雷など）を市町村単位で確認できる。"
-                "5時・11時・17時・23時に発表され随時更新される予測情報。注意（レベル2）以上の見通しがある市町村だけを表示する"
+                "5時・11時・17時・23時に発表され随時更新される予測情報。危険度は注意（レベル2）以上の見通しがある市町村だけを表示する。"
+                "あわせて予報値（最大風速・風向・波高・潮位・1時間最大雨量）を3時間ごとの数値で表示する"
             ),
             inputSchema={
                 "type": "object",
@@ -517,6 +518,12 @@ async def list_tools() -> list[Tool]:
                     "municipality": {
                         "type": "string",
                         "description": "市町村名で絞り込む（任意。例: '佐倉'）",
+                    },
+                    "element": {
+                        "type": "string",
+                        "description": "表示する項目を絞り込む（任意。省略すると危険度と予報値のすべて）。"
+                                       "例: '最大風速'・'風向'・'波高'・'潮位'・'1時間最大雨量'・'危険度'（危険度の表だけ）・"
+                                       "'風'（風の危険度＋最大風速＋風向）・'波'（波の危険度＋波高）",
                     },
                 },
                 "required": ["area_code"],
@@ -882,7 +889,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     elif name == "get_early_warning":
         result = await _get_early_warning(area_code)
     elif name == "get_warning_timeline":
-        result = await _get_warning_timeline(area_code, str(arguments.get("municipality", "")))
+        result = await _get_warning_timeline(area_code, str(arguments.get("municipality", "")), str(arguments.get("element", "")))
     elif name == "get_typhoon":
         result = await _get_typhoon(str(arguments.get("typhoon_number", "")))
     elif name == "get_mdrr_data":
@@ -1234,6 +1241,20 @@ def format_warning(area_name, area_code, reports, system_updated=None) -> str:
             if clr:
                 cleared20.setdefault(it["areaCode"], []).extend(clr)
 
+    # サマリー行（複数地域を機械的に集計する際に「発表中」「解除」の見出しを読み飛ばしても
+    # 誤判定しないよう、この1行だけで発表中の有無・種別が分かるようにする）
+    if active10 or active20:
+        names = []
+        for ws in list(active10.values()) + list(active20.values()):
+            for w in ws:
+                n = w.split("（")[0]
+                if n not in names:
+                    names.append(n)
+        lines.append(f"■ サマリー: 発表中あり → {'・'.join(names)}")
+    else:
+        lines.append("■ サマリー: 発表中の警報・注意報なし（解除済みのものは下記「解除」欄を参照）")
+    lines.append("")
+
     def label10(code):
         return WARNING_AREA_NAME_MAP.get(code) or master_name("class10s", code)
 
@@ -1293,17 +1314,63 @@ def _disp_width(s: str) -> int:
     return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in s)
 
 
-async def _get_warning_timeline(area_code: str, municipality: str = "") -> str:
+async def _get_warning_timeline(area_code: str, municipality: str = "", element: str = "") -> str:
     """時系列情報（3時間ごとの警報等の見通し）を取得して整形する"""
     area_name = AREA_CODE_MAP.get(area_code, area_code)
     try:
         data = fetch_json(WARNING_TIMELINE_URL.format(area_code=area_code))
     except requests.exceptions.RequestException as e:
         return f"エラー: 時系列情報の取得に失敗しました。\n詳細: {e}"
-    return format_warning_timeline(area_name, area_code, data, municipality)
+    return format_warning_timeline(area_name, area_code, data, municipality, element)
 
 
-def format_warning_timeline(area_name, area_code, data, municipality="") -> str:
+TIMELINE_FORECAST_ORDER = ("最大風速", "風向", "波高", "潮位", "1時間最大雨量")
+TIMELINE_UNIT_SHOWN = ("m/s", "m", "mm")     # 風向の単位（８方位漢字）は表示しない
+
+
+def _nfkc(s: str) -> str:
+    import unicodedata
+    return unicodedata.normalize("NFKC", s or "")
+
+
+def _timeline_forecast_rows(ts, municipality="", element=""):
+    """時系列情報の予報値（最大風速・風向・波高・潮位・1時間最大雨量）を、市町村×項目の行にまとめる。
+
+    地域（陸上・東シナ海側など）ごとに値が同じなら1行にまとめ、違えば地域ごとに分ける。
+    戻り値: [(市町村名, 項目名(単位付き), 地域名, [値...])]
+    """
+    want = _nfkc(element)
+    rows = []
+    for it in ts.get("class20Items") or []:
+        name = master_name("class20s", it["areaCode"])
+        if municipality and municipality not in name:
+            continue
+        for k in it.get("kinds") or []:
+            for part in k.get("forecastParts") or []:
+                kind = _nfkc(part.get("type") or "")           # 「１時間最大雨量」の全角数字を正規化
+                if not kind or (want and want not in kind):
+                    continue
+                groups, unit = {}, ""
+                for loc in part.get("locals") or []:
+                    vs = loc.get("values") or []
+                    seq = tuple(str(v.get("value")) if v.get("value") not in (None, "") else "－" for v in vs)
+                    unit = unit or (vs[0].get("unit") if vs else "") or ""
+                    groups.setdefault(seq, []).append(loc.get("areaName") or "")
+                for seq, areas in groups.items():
+                    label = kind + (f"({unit})" if unit in TIMELINE_UNIT_SHOWN else "")
+                    rows.append((name, label, "・".join(a for a in areas if a), list(seq)))
+    def order(r):
+        kind = r[1].split("(")[0]
+        return (r[0], TIMELINE_FORECAST_ORDER.index(kind) if kind in TIMELINE_FORECAST_ORDER else 99, r[2])
+    return sorted(rows, key=order)
+
+
+def _timeline_day_marks(blocks):
+    return "／".join(f"{b.month}/{b.day}({['月','火','水','木','金','土','日'][b.weekday()]})から"
+                     for i, b in enumerate(blocks) if i == 0 or b.day != blocks[i - 1].day)
+
+
+def format_warning_timeline(area_name, area_code, data, municipality="", element="") -> str:
     try:
         series = data["timeSeries"]
     except (KeyError, TypeError):
@@ -1325,6 +1392,8 @@ def format_warning_timeline(area_name, area_code, data, municipality="") -> str:
         for k in it.get("kinds") or []:
             for part in k.get("significancyParts") or []:
                 label = (part.get("type") or "").replace("危険度", "")
+                if element and _nfkc(element) not in _nfkc(label + "危険度"):
+                    continue
                 for loc in part.get("locals") or []:
                     lv = []
                     for c in loc.get("codes") or []:
@@ -1338,16 +1407,17 @@ def format_warning_timeline(area_name, area_code, data, municipality="") -> str:
             if any(x >= 2 for x in lv):
                 rows.append((name, label, lv))
 
-    if not rows:
+    forecast = _timeline_forecast_rows(ts, municipality, element)
+    if not rows and not forecast:
         target = f"（{municipality}）" if municipality else ""
         lines.append(f"現在、{target}注意以上の見通し（大雨・土砂災害・高潮・風・雷など）は示されていません。")
+    elif not rows:
+        if not element:      # 項目を絞り込んだときの不在は「見通しなし」と誤解させない
+            target = f"（{municipality}）" if municipality else ""
+            lines.append(f"現在、{target}注意以上の危険度の見通しは示されていません。")
     else:
         hdr = " ".join(f"{b.hour:>2}" for b in blocks)          # 各列は表示幅2（全角1文字と同じ）
-        day_marks = []
-        for i, b in enumerate(blocks):
-            if i == 0 or b.day != blocks[i - 1].day:
-                day_marks.append(f"{b.month}/{b.day}({['月','火','水','木','金','土','日'][b.weekday()]})から")
-        lines.append("凡例: 注=注意(レベル2) 警=警戒(レベル3) 危=危険(レベル4) 切=災害切迫(レベル5) ・=なし　" + "／".join(day_marks))
+        lines.append("凡例: 注=注意(レベル2) 警=警戒(レベル3) 危=危険(レベル4) 切=災害切迫(レベル5) ・=なし　" + _timeline_day_marks(blocks))
         labels = [f"{name}・{label}" for name, label, _ in sorted(rows, key=lambda r: (r[0], r[1]))]
         width = max(_disp_width(x) for x in labels + ["時刻(JST)"])
         lines.append("時刻(JST)".ljust(width - _disp_width("時刻(JST)") + len("時刻(JST)")) + "  " + hdr)
@@ -1355,6 +1425,21 @@ def format_warning_timeline(area_name, area_code, data, municipality="") -> str:
             cells = " ".join(TIMELINE_LEVEL_MARK.get(x, "・") for x in lv)
             lines.append(lab + " " * (width - _disp_width(lab)) + "  " + cells)
         lines.append(f"（対象: 注意以上の見通しがある市町村×種類 {len(rows)}行）")
+    if forecast:
+        cells_w = max(2, max(_disp_width(c) for _, _, _, vs in forecast for c in vs))
+        labels = [f"{name}・{kind}" + (f"[{areas}]" if areas else "") for name, kind, areas, _ in forecast]
+        width = max(_disp_width(x) for x in labels + ["時刻(JST)"])
+
+        def cell(c):
+            return " " * (cells_w - _disp_width(c)) + c
+        if lines[-1] != "":
+            lines.append("")
+        lines.append("【予報値（3時間ごと）】 " + _timeline_day_marks(blocks) + "　－=値なし")
+        lines.append("時刻(JST)" + " " * (width - _disp_width("時刻(JST)")) + "  " + " ".join(cell(str(b.hour)) for b in blocks))
+        for lab, (_, _, _, vs) in zip(labels, forecast):
+            lines.append(lab + " " * (width - _disp_width(lab)) + "  " + " ".join(cell(c) for c in vs))
+        note = "[ ]は地域。単位は各行の（ ）内" + ("。風向は8方位" if any(k.startswith("風向") for _, k, _, _ in forecast) else "")
+        lines.append(f"（予報値 {len(forecast)}行。{note}）")
     lines.append("")
     lines.append("出典: 気象庁 https://www.jma.go.jp/bosai/warning_timeline/")
     return "\n".join(lines).rstrip()

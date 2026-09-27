@@ -57,7 +57,7 @@ class UrlTest(unittest.TestCase):
              mock.patch.object(server, "_get_typhoon", new=mock.AsyncMock(return_value="Y")) as m2:
             out1 = run(server.call_tool("get_warning_timeline", {"area_code": 120000, "municipality": "佐倉"}))
             out2 = run(server.call_tool("get_typhoon", {"typhoon_number": "26"}))
-        m1.assert_awaited_with("120000", "佐倉")                          # 整数で渡されても文字列に正規化
+        m1.assert_awaited_with("120000", "佐倉", "")                          # 整数で渡されても文字列に正規化
         m2.assert_awaited_with("26")
         self.assertEqual((out1[0].text, out2[0].text), ("T", "Y"))
 
@@ -195,6 +195,55 @@ class TimelineFormatTest(unittest.TestCase):
         self.assertIn("注意以上の見通し", server.format_warning_timeline("千葉県", "120000", self.doc(), "佐倉"))
         self.assertIn("現在、（佐倉）注意以上", server.format_warning_timeline("千葉県", "120000", self.doc(), "佐倉"))
         self.assertIn("館山市", server.format_warning_timeline("千葉県", "120000", self.doc(), "館山"))
+
+    def forecast_doc(self):
+        def fp(t, *locals_):
+            return {"type": t, "locals": [{**({"areaName": n} if n else {}), "values": [{"unit": u, "value": v} for v in vs]} for n, u, vs in locals_]}
+        d = self.doc()
+        d["timeSeries"][0]["class20Items"][0]["kinds"].append({"forecastParts": [
+            fp("最大風速", ("陸上", "m/s", ["18", "20", "23"]), ("東シナ海側", "m/s", ["18", "20", "23"])),   # 同じ値は1行にまとめる
+            fp("風向", ("陸上", "８方位漢字", ["東", "北東", "北"]), ("東シナ海側", "８方位漢字", ["東", "東", "北"])),   # 違う値は地域ごと
+            fp("波高", (None, "m", ["5", "6", "6"])),
+            fp("潮位", (None, "m", ["-0.2", "0.9", "1.2"])),
+            fp("１時間最大雨量", (None, "mm", ["5", "", "10"]))]})
+        return d
+
+    def test_forecast_values_all_elements(self):
+        text = server.format_warning_timeline("千葉県", "120000", self.forecast_doc(), "館山")
+        self.assertIn("【予報値（3時間ごと）】", text)
+        row = lambda key: next(l for l in text.splitlines() if l.startswith(key))
+        self.assertEqual(row("館山市・最大風速(m/s)[陸上・東シナ海側]").split()[-3:], ["18", "20", "23"])   # 値が同じ地域は1行
+        self.assertEqual(row("館山市・風向[陸上]").split()[-3:], ["東", "北東", "北"])                      # 値が違えば地域ごと
+        self.assertEqual(row("館山市・風向[東シナ海側]").split()[-3:], ["東", "東", "北"])
+        self.assertEqual(row("館山市・波高(m)").split()[-3:], ["5", "6", "6"])
+        self.assertEqual(row("館山市・潮位(m)").split()[-3:], ["-0.2", "0.9", "1.2"])
+        self.assertEqual(row("館山市・1時間最大雨量(mm)").split()[-3:], ["5", "－", "10"])                  # 全角の「１時間」を正規化・空は「－」
+        order = [l.split("(")[0].split("[")[0] for l in text.splitlines() if l.startswith("館山市・") and "予報" not in l]
+        self.assertLess(order.index("館山市・最大風速"), order.index("館山市・風向"))
+        self.assertLess(order.index("館山市・潮位"), order.index("館山市・1時間最大雨量"))
+
+    def test_element_filter(self):
+        doc = self.forecast_doc()
+        text = server.format_warning_timeline("千葉県", "120000", doc, "館山", "最大風速")
+        self.assertIn("最大風速(m/s)", text)
+        self.assertNotIn("風向", text)
+        self.assertNotIn("館山市・土砂災害", text)
+        self.assertNotIn("注意以上の危険度の見通しは示されていません", text)   # 絞り込みによる不在は「見通しなし」と誤解させない
+        self.assertIn("館山市・1時間最大雨量", server.format_warning_timeline("千葉県", "120000", doc, "館山", "1時間最大雨量"))
+        self.assertIn("館山市・1時間最大雨量", server.format_warning_timeline("千葉県", "120000", doc, "館山", "１時間最大雨量"))
+        levels = server.format_warning_timeline("千葉県", "120000", doc, "館山", "危険度")
+        self.assertIn("館山市・土砂災害", levels)
+        self.assertNotIn("予報値", levels)
+        wind = server.format_warning_timeline("千葉県", "120000", doc, "館山", "風")
+        self.assertIn("最大風速", wind)
+        self.assertIn("風向", wind)
+        self.assertNotIn("波高", wind)
+
+    def test_forecast_shown_even_without_levels(self):
+        doc = self.forecast_doc()
+        text = server.format_warning_timeline("千葉県", "120000", doc, "館山", "波高")
+        self.assertIn("館山市・波高(m)", text)
+        self.assertNotIn("現在、", text)
 
     def test_broken_documents(self):
         for bad in ({}, None, {"timeSeries": [{"timeDefines": [{"dateTime": "2026-09-24T12:00:00+09:00", "duration": "PT24H"}]}]}):
