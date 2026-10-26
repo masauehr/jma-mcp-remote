@@ -47,7 +47,7 @@ MDRR_RECORD_UPD_URL = MDRR_BASE_URL + "/rank_update/d{mmdd}.html"
 # 過去の気象データ検索（気象台等＝「*」付き地点の1976年以前を含む順位）
 ETRN_STATION_LIST_URL = "https://www.data.jma.go.jp/stats/etrn/select/prefecture.php?prec_no={prec_no}"
 ETRN_PREC_LIST_URL    = "https://www.data.jma.go.jp/stats/etrn/select/prefecture00.php"
-ETRN_RANK_URL         = "https://www.data.jma.go.jp/stats/etrn/view/rank_s.php?prec_no={prec_no}&block_no={block_no}&year=&month={month}&day=&view=h0"
+ETRN_RANK_URL         = "https://www.data.jma.go.jp/stats/etrn/view/rank_s.php?prec_no={prec_no}&block_no={block_no}&year=&month={month}&day=&view={view}"
 FORECASTER_COMMENT_URL = "https://www.jma.go.jp/bosai/forecaster_comment/data/comments/{area_code}.txt"
 INFORMATION_LIST_URL   = "https://www.jma.go.jp/bosai/information/data/r8/information.json"
 INFORMATION_DENBUN_URL = "https://www.jma.go.jp/bosai/information/data/r8/denbun/{json_name}.json"
@@ -1951,29 +1951,43 @@ def _load_etrn_stations() -> dict:
 
 
 def _etrn_rank_note(station: str, month: int, date_key: str, label: str) -> str:
-    """「*」付き地点の補足: 過去の気象データ検索（1976年以前を含む）での順位を1行で返す。取得不可なら空文字"""
+    """「*」付き地点の補足: 過去の気象データ検索での順位を返す。取得不可なら空文字。
+    主な要素（統計開始が古い・1976年以前を含む）と詳細（N時間降水量。単位時間・日界が異なり統計開始が新しい）の2種類を併記する"""
     try:
         prec_no, block_no = _load_etrn_stations()[station]
-        url = ETRN_RANK_URL.format(prec_no=prec_no, block_no=block_no, month=month)
-        r = requests.get(url, headers=HEADERS, timeout=30)
-        r.raise_for_status()
-        tables = _parse_html_tables(r.content.decode("utf-8", errors="replace"))
     except (KeyError, requests.exceptions.RequestException):
-        return f"    ※{station}は気象台等（*）。過去の気象データ検索での確認に失敗: {ETRN_STATION_LIST_URL.format(prec_no='')}"
-    for tbl in tables:
-        for row in tbl["rows"]:
-            if not row or not row[0].startswith(label):
-                continue
-            entries = row[1:11]
-            rank = next((i + 1 for i, e in enumerate(entries) if date_key in e), None)
-            top3 = " / ".join(f"{i + 1}位 {e}" for i, e in enumerate(entries[:3]))
-            period = re.sub(r'^(\d{4}/\d+)(\d{4}/\d+)$', r'\1〜\2', row[11]) if len(row) > 11 else ""
-            # 日界の違いで起日がずれる場合があるため、一致しないときは断定しない
-            where = f"{rank}位" if rank else "起日が一致する記録は上位10位内に見つからず（日界の違いの可能性あり）"
-            return (f"    ※{station}は気象台等（*）。1976年以前を含む過去の気象データ検索（{label}・{month}月、統計期間 {period}）: {where}\n"
-                    f"      上位: {top3}\n"
-                    f"      {ETRN_RANK_URL.format(prec_no=prec_no, block_no=block_no, month=month)}")
-    return ""
+        return f"    ※{station}は気象台等（*）。過去の気象データ検索での確認に失敗しました（地点コードを取得できません）"
+    out = [f"    ※{station}は気象台等（*）。過去の気象データ検索（{label}・{month}月）での順位:"]
+    for view, view_name in (("h0", "主な要素"), ("np0", "詳細（N時間降水量）")):
+        url = ETRN_RANK_URL.format(prec_no=prec_no, block_no=block_no, month=month, view=view)
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=30)
+            r.raise_for_status()
+            tables = _parse_html_tables(r.content.decode("utf-8", errors="replace"))
+        except requests.exceptions.RequestException:
+            out.append(f"      {view_name}: 取得に失敗 {url}")
+            continue
+        found = False
+        for tbl in tables:
+            for row in tbl["rows"]:
+                if not row or not row[0].startswith(label):
+                    continue
+                found = True
+                entries = row[1:11]
+                rank = next((i + 1 for i, e in enumerate(entries) if date_key in e), None)
+                top3 = " / ".join(f"{i + 1}位 {e}" for i, e in enumerate(entries[:3]))
+                period = re.sub(r'^(\d{4}/\d+)(\d{4}/\d+)$', r'\1〜\2', row[11]) if len(row) > 11 else ""
+                # 日界の違いで起日がずれる場合があるため、一致しないときは断定しない
+                where = f"{rank}位" if rank else "起日が一致する記録は上位10位内に見つからず（日界の違いの可能性あり）"
+                out.append(f"      {view_name}（統計期間 {period}）: {where}　上位: {top3}")
+                out.append(f"        {url}")
+                break
+            if found:
+                break
+        if not found:
+            out.append(f"      {view_name}: 該当要素なし {url}")
+    out.append("      ※順位は取得時点のもの。更新状況の日付より後の記録も含むため、順位が下がることがある")
+    return "\n".join(out)
 
 
 async def _get_record_update(date_str: str = "") -> str:
