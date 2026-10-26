@@ -44,6 +44,10 @@ PROBABILITY_URL  = "https://www.jma.go.jp/bosai/probability/data/probability/r8/
 MDRR_BASE_URL       = "https://www.data.jma.go.jp/stats/data/mdrr"
 MDRR_RANKING_URL    = MDRR_BASE_URL + "/rank_daily/data{mmdd}.html"
 MDRR_RECORD_UPD_URL = MDRR_BASE_URL + "/rank_update/d{mmdd}.html"
+# 過去の気象データ検索（気象台等＝「*」付き地点の1976年以前を含む順位）
+ETRN_STATION_LIST_URL = "https://www.data.jma.go.jp/stats/etrn/select/prefecture.php?prec_no={prec_no}"
+ETRN_PREC_LIST_URL    = "https://www.data.jma.go.jp/stats/etrn/select/prefecture00.php"
+ETRN_RANK_URL         = "https://www.data.jma.go.jp/stats/etrn/view/rank_s.php?prec_no={prec_no}&block_no={block_no}&year=&month={month}&day=&view=h0"
 FORECASTER_COMMENT_URL = "https://www.jma.go.jp/bosai/forecaster_comment/data/comments/{area_code}.txt"
 INFORMATION_LIST_URL   = "https://www.jma.go.jp/bosai/information/data/r8/information.json"
 INFORMATION_DENBUN_URL = "https://www.jma.go.jp/bosai/information/data/r8/denbun/{json_name}.json"
@@ -1923,6 +1927,55 @@ async def _get_daily_ranking(date_str: str = "", element_filter: str = "") -> st
     return "\n".join(lines).rstrip()
 
 
+# 気象台等（地点名 → (prec_no, block_no)）。初回の「*」付き地点の補足時に1回だけ構築する
+_ETRN_STATION_CACHE: dict = {}
+
+
+def _load_etrn_stations() -> dict:
+    """過去の気象データ検索の気象台等（viewPoint の種別 's'）の地点名→(prec_no, block_no)を返す"""
+    if _ETRN_STATION_CACHE:
+        return _ETRN_STATION_CACHE
+    r = requests.get(ETRN_PREC_LIST_URL, headers=HEADERS, timeout=30)
+    r.raise_for_status()
+    precs = sorted(set(re.findall(r'prec_no=(\d+)', r.content.decode("utf-8", errors="replace"))))
+    for prec_no in precs:
+        try:
+            page = requests.get(ETRN_STATION_LIST_URL.format(prec_no=prec_no), headers=HEADERS, timeout=30)
+            page.raise_for_status()
+        except requests.exceptions.RequestException:
+            continue
+        html = page.content.decode("utf-8", errors="replace")
+        for m in re.finditer(r"viewPoint\('s','(\d+)','([^']+)'", html):
+            _ETRN_STATION_CACHE.setdefault(m.group(2), (prec_no, m.group(1)))
+    return _ETRN_STATION_CACHE
+
+
+def _etrn_rank_note(station: str, month: int, date_key: str, label: str) -> str:
+    """「*」付き地点の補足: 過去の気象データ検索（1976年以前を含む）での順位を1行で返す。取得不可なら空文字"""
+    try:
+        prec_no, block_no = _load_etrn_stations()[station]
+        url = ETRN_RANK_URL.format(prec_no=prec_no, block_no=block_no, month=month)
+        r = requests.get(url, headers=HEADERS, timeout=30)
+        r.raise_for_status()
+        tables = _parse_html_tables(r.content.decode("utf-8", errors="replace"))
+    except (KeyError, requests.exceptions.RequestException):
+        return f"    ※{station}は気象台等（*）。過去の気象データ検索での確認に失敗: {ETRN_STATION_LIST_URL.format(prec_no='')}"
+    for tbl in tables:
+        for row in tbl["rows"]:
+            if not row or not row[0].startswith(label):
+                continue
+            entries = row[1:11]
+            rank = next((i + 1 for i, e in enumerate(entries) if date_key in e), None)
+            top3 = " / ".join(f"{i + 1}位 {e}" for i, e in enumerate(entries[:3]))
+            period = re.sub(r'^(\d{4}/\d+)(\d{4}/\d+)$', r'\1〜\2', row[11]) if len(row) > 11 else ""
+            # 日界の違いで起日がずれる場合があるため、一致しないときは断定しない
+            where = f"{rank}位" if rank else "起日が一致する記録は上位10位内に見つからず（日界の違いの可能性あり）"
+            return (f"    ※{station}は気象台等（*）。1976年以前を含む過去の気象データ検索（{label}・{month}月、統計期間 {period}）: {where}\n"
+                    f"      上位: {top3}\n"
+                    f"      {ETRN_RANK_URL.format(prec_no=prec_no, block_no=block_no, month=month)}")
+    return ""
+
+
 async def _get_record_update(date_str: str = "") -> str:
     """観測史上1位の値 更新状況を取得して整形する"""
     mmdd = _mmdd_from_arg(date_str)
@@ -1973,11 +2026,25 @@ async def _get_record_update(date_str: str = "") -> str:
             if not any(re.match(r'^-?\d|^[^\d\s]{2,}', c) for c in rows[1]):
                 data_start = 2
 
+        # 1時間・24時間降水量は、気象台等（*付き）の1976年以前を含む順位を補足する
+        label = "日最大1時間降水量" if caption.startswith("1時間降水量") else (
+            "月最大24時間降水量" if caption.startswith("24時間降水量") else "")
+
         for row in rows[data_start:]:
             if not row or not any(row):
                 continue
             parts = [c for c in row[:9] if c]
             lines.append("  " + "  ".join(parts))
+            if label:
+                m_st = next((re.match(r'^(.+?)（.+?）\*', c) for c in row if re.match(r'^(.+?)（.+?）\*', c)), None)
+                if m_st:
+                    # 起日の年は今日以前の直近（引数日付は過去7日以内）
+                    today = datetime.now(timezone(timedelta(hours=9)))
+                    year = today.year if (int(mmdd[:2]), int(mmdd[2:])) <= (today.month, today.day) else today.year - 1
+                    date_key = f"{year}/{int(mmdd[:2])}/{int(mmdd[2:])}"
+                    note = _etrn_rank_note(m_st.group(1), int(mmdd[:2]), date_key, label)
+                    if note:
+                        lines.append(note)
 
         lines.append("")
         updated_count += 1
